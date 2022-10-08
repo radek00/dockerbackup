@@ -2,12 +2,11 @@ use std::process;
 use std::process:: { Command };
 
 
-pub fn check_docker(mut shell_session: Command) -> () {
+pub fn check_docker() -> () {
 
-    let status = shell_session.arg("-c").arg("docker --version").status().unwrap_or_else(| err | {
+    let status = create_shell_session().arg("docker --version").status().unwrap_or_else(| err | {
         panic!("Error executing command: {}", err)
     });
-
     if status.success() {
         ()
     } else {
@@ -16,6 +15,29 @@ pub fn check_docker(mut shell_session: Command) -> () {
     }
 
     
+}
+
+pub fn check_running_containers() -> () {
+    let running_containers = create_shell_session().arg("docker container ls -q").output().unwrap();
+
+    let test = String::from_utf8(running_containers.stdout).unwrap();
+
+    if test.is_empty() {
+        println!("No running containers found");
+        ()
+    } else { stop_containers(test) }
+}
+
+fn stop_containers(containers: String) -> () {
+    println!("Stoppig containers...");
+    let status = create_shell_session().arg(format!("docker stop {}", containers)).status().unwrap();
+    if status.success()  {println!("Containers stopped.")} else { panic!("Couldn't stop containers.") };
+}
+
+fn create_shell_session() -> Command {
+    let mut shell =  Command::new("sh");
+    shell.arg("-c");
+    return shell;
 }
 
 //pub
