@@ -1,6 +1,28 @@
 use std::process;
 use std::process:: { Command };
 
+pub struct Config {
+    pub dest_path: String,
+    pub new_dir: String,
+    pub ssh_dest: String
+}
+
+impl Config {
+    pub fn build(args: &[String]) -> Result<Config, &'static str> {
+        if args.len() < 2 {
+            return Err("not enough arguments");
+        }
+        
+        //let date = SystemTime::now();
+
+        let dest_path = args[1].clone();
+        let new_dir = String::from("dh");
+        let ssh_dest = args[2].clone();
+
+        Ok(Config { dest_path, new_dir, ssh_dest })
+    } 
+}
+
 
 pub fn check_docker() -> () {
 
