@@ -61,7 +61,7 @@ fn check_docker() -> () {
 fn check_running_containers() -> String {
     let running_containers = create_shell_session().arg("docker container ls -q").output().unwrap();
 
-    let containers_list = String::from_utf8(running_containers.stdout).unwrap();
+    let containers_list = String::from_utf8(running_containers.stdout).unwrap().replace("\n", " ");
 
     if containers_list.is_empty() {
         println!("No running containers found");

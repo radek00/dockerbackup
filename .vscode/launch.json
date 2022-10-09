@@ -38,7 +38,10 @@
                     "kind": "bin"
                 }
             },
-            "args": [],
+            "args": [
+                "/home/radek/docker",
+                "/home/radek/test"
+            ],
             "cwd": "${workspaceFolder}"
         },
         {
