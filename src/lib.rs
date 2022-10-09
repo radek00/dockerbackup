@@ -1,10 +1,12 @@
 use std::process;
 use std::process:: { Command };
+use std::env;
 
 pub struct Config {
     pub dest_path: String,
     pub new_dir: String,
-    pub ssh_dest: String
+    //pub ssh_dest: String,
+    pub volume_path: String,
 }
 
 impl Config {
@@ -17,14 +19,30 @@ impl Config {
 
         let dest_path = args[1].clone();
         let new_dir = String::from("dh");
-        let ssh_dest = args[2].clone();
+        //let ssh_dest = args[2].clone();
+        let volume_path = args[2].clone();
 
-        Ok(Config { dest_path, new_dir, ssh_dest })
+        Ok(Config { dest_path, new_dir, volume_path })
     } 
 }
 
+pub fn run() -> () {
+    let args: Vec<String> = env::args().collect();
+    let config = Config::build(&args).unwrap();
 
-pub fn check_docker() -> () {
+    check_docker();
+    let running_containers = check_running_containers();
+    local_rsync_backup(config);
+    if start_containers(running_containers) {
+        println!("Containers started successfully");
+    } else {
+        eprintln!("Couldn't start containers")
+    }
+    ()
+}
+
+
+fn check_docker() -> () {
 
     let status = create_shell_session().arg("docker --version").status().unwrap_or_else(| err | {
         panic!("Error executing command: {}", err)
@@ -39,18 +57,36 @@ pub fn check_docker() -> () {
     
 }
 
-pub fn check_running_containers() -> () {
+fn check_running_containers() -> String {
     let running_containers = create_shell_session().arg("docker container ls -q").output().unwrap();
 
-    let test = String::from_utf8(running_containers.stdout).unwrap();
+    let containers_list = String::from_utf8(running_containers.stdout).unwrap();
 
-    if test.is_empty() {
+    if containers_list.is_empty() {
         println!("No running containers found");
-        ()
-    } else { stop_containers(test) }
+    } else { 
+        stop_containers(&containers_list);
+    }
+    containers_list
 }
 
-fn stop_containers(containers: String) -> () {
+fn local_rsync_backup(config: Config) -> () {
+    let rsync = create_shell_session().arg(format!("rsync -az {} {}", config.volume_path, config.dest_path)).status().unwrap_or_else(| err | {
+        eprint!("Error executing rsync comand: {}", err);
+        process::exit(1);
+    });
+
+    if rsync.success() {println!("Backup successful")} else { eprintln!("Backup failed") };
+
+    
+}
+
+fn start_containers(containers: String) -> bool {
+    let started = create_shell_session().arg(format!("docker start {}", containers)).status().unwrap();
+    started.success()
+}
+
+fn stop_containers(containers: &String) -> () {
     println!("Stoppig containers...");
     let status = create_shell_session().arg(format!("docker stop {}", containers)).status().unwrap();
     if status.success()  {println!("Containers stopped.")} else { panic!("Couldn't stop containers.") };
@@ -61,14 +97,3 @@ fn create_shell_session() -> Command {
     shell.arg("-c");
     return shell;
 }
-
-//pub
-
-// pub fn check_running_containers() -> bool {
-//     //let from_shell = Command::new("sh").arg("-c").arg("docker container ls -q").output().expect("failed");
-//     //return String::from_utf8(from_shell.status).unwrap();
-//     // let running_containers = shell_session.arg("docker container ls -q").output().unwrap_or_else(| err | {
-//     //     eprintln!("Error running docker command: {}", err);
-//     //     panic!("Can't continue ")
-//     // });
-// }
