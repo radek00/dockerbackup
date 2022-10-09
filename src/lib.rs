@@ -1,6 +1,7 @@
 use std::process;
 use std::process:: { Command };
 use std::env;
+use chrono::{self, Datelike};
 
 pub struct Config {
     pub dest_path: String,
@@ -15,10 +16,10 @@ impl Config {
             return Err("not enough arguments");
         }
         
-        //let date = SystemTime::now();
+        let date = chrono::Local::now();
 
         let dest_path = args[1].clone();
-        let new_dir = String::from("dh");
+        let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
         //let ssh_dest = args[2].clone();
         let volume_path = args[2].clone();
 
@@ -32,7 +33,7 @@ pub fn run() -> () {
 
     check_docker();
     let running_containers = check_running_containers();
-    local_rsync_backup(config);
+    local_rsync_backup(&config);
     if start_containers(running_containers) {
         println!("Containers started successfully");
     } else {
@@ -70,8 +71,9 @@ fn check_running_containers() -> String {
     containers_list
 }
 
-fn local_rsync_backup(config: Config) -> () {
-    let rsync = create_shell_session().arg(format!("rsync -az {} {}", config.volume_path, config.dest_path)).status().unwrap_or_else(| err | {
+fn local_rsync_backup(config: &Config) -> () {
+    create_new_dir(&config);
+    let rsync = create_shell_session().arg(format!("rsync -az {} {}/{}", config.volume_path, config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
         eprint!("Error executing rsync comand: {}", err);
         process::exit(1);
     });
@@ -79,6 +81,15 @@ fn local_rsync_backup(config: Config) -> () {
     if rsync.success() {println!("Backup successful")} else { eprintln!("Backup failed") };
 
     
+}
+
+fn create_new_dir(config: &Config) -> () {
+    let new_dir = create_shell_session().arg(format!("mkdir -p {}/{}", config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
+        eprintln!("Error creating directory: {}", err);
+        process::exit(1);
+    });
+    if new_dir.success() { () } else { process::exit(1) }
+
 }
 
 fn start_containers(containers: String) -> bool {
