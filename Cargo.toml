@@ -2,6 +2,14 @@
 name = "dockerbackup"
 version = "0.1.0"
 edition = "2021"
+authors = ["Radek"]
+license = "MIT OR Apache-2.0"
+description = "Simple tool for backing up docker volumes. Work in progress"
+readme = "README.md"
+homepage = "https://github.com/Radekor500/dockerbackup"
+repository = "https://github.com/Radekor500/dockerbackup"
+keywords = ["cli", "backup", "docker"]
+categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
