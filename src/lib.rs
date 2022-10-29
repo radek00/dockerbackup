@@ -42,7 +42,7 @@ pub fn run() -> () {
     check_docker();
     let containers = check_running_containers();
     let running_containers: Vec<&str> = containers.trim().split("\n").collect();
-    if running_containers.len() > 0 {
+    if running_containers.len() == 0 {
         println!("No running containers found");
     } else { 
         stop_containers(&running_containers);
