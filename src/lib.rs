@@ -90,11 +90,6 @@ fn local_rsync_backup(config: &Config) -> () {
         process::exit(1);
     });
 
-    // let rsync = Command::new("rsync").args([format!("--exclude={{{}}}", config.excluded_directories).as_str(), "-az", config.volume_path.as_str(), format!("{}/{}", config.dest_path, config.new_dir).as_str()]).status().unwrap_or_else(| err | {
-    //     eprint!("Error executing rsync comand: {}", err);
-    //     process::exit(1);
-    // });
-
     if exec_rsync.success() {println!("Backup successful")} else { eprintln!("Backup failed") };
 
     
