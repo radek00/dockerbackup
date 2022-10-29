@@ -8,6 +8,7 @@ pub struct Config {
     pub new_dir: String,
     //pub ssh_dest: String,
     pub volume_path: String,
+    pub excluded_directories: String,
 }
 
 impl Config {
@@ -22,8 +23,15 @@ impl Config {
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
         //let ssh_dest = args[2].clone();
         let volume_path = args[2].clone();
+        let excluded_directories;
+        if args.get(3).is_none() {
+            excluded_directories = String::new();
+        } else {
+            excluded_directories = args[3].clone();
+        }
 
-        Ok(Config { dest_path, new_dir, volume_path })
+
+        Ok(Config { dest_path, new_dir, volume_path, excluded_directories })
     } 
 }
 
@@ -73,12 +81,16 @@ fn check_running_containers() -> String {
 
 fn local_rsync_backup(config: &Config) -> () {
     create_new_dir(&config);
-    let rsync = create_shell_session().arg(format!("rsync -az {} {}/{}", config.volume_path, config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
+    let mut rsync = Command::new("rsync");
+    for dir in config.excluded_directories.split(",") {
+        rsync.arg(format!("--exclude={}", dir));
+    }
+    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
         eprint!("Error executing rsync comand: {}", err);
         process::exit(1);
     });
 
-    if rsync.success() {println!("Backup successful")} else { eprintln!("Backup failed") };
+    if exec_rsync.success() {println!("Backup successful")} else { eprintln!("Backup failed") };
 
     
 }
