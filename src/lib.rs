@@ -81,7 +81,8 @@ fn check_running_containers() -> String {
 
 fn local_rsync_backup(config: &Config) -> () {
     create_new_dir(&config);
-    let rsync = create_shell_session().arg(format!("rsync --exclude={{{}}} -az {} {}/{}", config.excluded_directories, config.volume_path, config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
+    print!("{}", format!("rsync --exclude={{{}}} -az {} {}/{}", config.excluded_directories, config.volume_path, config.dest_path, config.new_dir));
+    let rsync = Command::new("rsync").args([format!("--exclude={{{}}}", config.excluded_directories).as_str(), "-az", config.volume_path.as_str(), format!("{}/{}", config.dest_path, config.new_dir).as_str()]).status().unwrap_or_else(| err | {
         eprint!("Error executing rsync comand: {}", err);
         process::exit(1);
     });
