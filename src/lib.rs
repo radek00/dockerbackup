@@ -40,9 +40,15 @@ pub fn run() -> () {
     let config = Config::build(&args).unwrap();
 
     check_docker();
-    let running_containers = check_running_containers();
+    let containers = check_running_containers();
+    let running_containers: Vec<&str> = containers.trim().split("\n").collect();
+    if running_containers.len() > 0 {
+        println!("No running containers found");
+    } else { 
+        stop_containers(&running_containers);
+    }
     local_rsync_backup(&config);
-    if start_containers(running_containers) {
+    if start_containers(&running_containers) {
         println!("Containers started successfully");
     } else {
         eprintln!("Couldn't start containers")
@@ -53,7 +59,7 @@ pub fn run() -> () {
 
 fn check_docker() -> () {
 
-    let status = create_shell_session().arg("docker --version").status().unwrap_or_else(| err | {
+    let status = Command::new("docker").arg("--version").status().unwrap_or_else(| err | {
         panic!("Error executing command: {}", err)
     });
     if status.success() {
@@ -62,20 +68,12 @@ fn check_docker() -> () {
         eprintln!("Can't continue without docker installed");
         process::exit(1);
     }
-
     
 }
 
 fn check_running_containers() -> String {
-    let running_containers = create_shell_session().arg("docker container ls -q").output().unwrap();
-
-    let containers_list = String::from_utf8(running_containers.stdout).unwrap().replace("\n", " ");
-
-    if containers_list.is_empty() {
-        println!("No running containers found");
-    } else { 
-        stop_containers(&containers_list);
-    }
+    let running_containers = Command::new("docker").args(["container", "ls", "-q"]).output().unwrap();
+    let containers_list = String::from_utf8(running_containers.stdout).unwrap();
     containers_list
 }
 
@@ -96,7 +94,7 @@ fn local_rsync_backup(config: &Config) -> () {
 }
 
 fn create_new_dir(config: &Config) -> () {
-    let new_dir = create_shell_session().arg(format!("mkdir -p {}/{}", config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
+    let new_dir = Command::new("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
         eprintln!("Error creating directory: {}", err);
         process::exit(1);
     });
@@ -104,19 +102,13 @@ fn create_new_dir(config: &Config) -> () {
 
 }
 
-fn start_containers(containers: String) -> bool {
-    let started = create_shell_session().arg(format!("docker start {}", containers)).status().unwrap();
+fn start_containers(containers: &Vec<&str>) -> bool {
+    let started = Command::new("docker").arg("start").args(containers).status().unwrap();
     started.success()
 }
 
-fn stop_containers(containers: &String) -> () {
+fn stop_containers(containers: &Vec<&str>) -> () {
     println!("Stoppig containers...");
-    let status = create_shell_session().arg(format!("docker stop {}", containers)).status().unwrap();
+    let status = Command::new("docker").arg("stop").args(containers).status().unwrap();
     if status.success()  {println!("Containers stopped.")} else { panic!("Couldn't stop containers.") };
-}
-
-fn create_shell_session() -> Command {
-    let mut shell =  Command::new("sh");
-    shell.arg("-c");
-    return shell;
 }
