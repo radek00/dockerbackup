@@ -41,18 +41,15 @@ pub fn run() -> () {
 
     check_docker();
     let containers = check_running_containers();
-    let running_containers: Vec<&str> = containers.trim().split("\n").collect();
+    let mut running_containers: Vec<&str> = containers.trim().split("\n").collect();
+    running_containers.retain(|&x| !x.is_empty());
     if running_containers.len() == 0 {
         println!("No running containers found");
     } else { 
         stop_containers(&running_containers);
     }
     local_rsync_backup(&config);
-    if start_containers(&running_containers) {
-        println!("Containers started successfully");
-    } else {
-        eprintln!("Couldn't start containers")
-    }
+    if running_containers.len() > 0 { start_containers(&running_containers) } 
     ()
 }
 
@@ -60,7 +57,8 @@ pub fn run() -> () {
 fn check_docker() -> () {
 
     let status = Command::new("docker").arg("--version").status().unwrap_or_else(| err | {
-        panic!("Error executing command: {}", err)
+        eprintln!("Error executing command: {}", err);
+        process::exit(1);
     });
     if status.success() {
         ()
@@ -102,9 +100,10 @@ fn create_new_dir(config: &Config) -> () {
 
 }
 
-fn start_containers(containers: &Vec<&str>) -> bool {
+fn start_containers(containers: &Vec<&str>) -> () {
+    println!("Starting containers...");
     let started = Command::new("docker").arg("start").args(containers).status().unwrap();
-    started.success()
+    if started.success() {println!("Containers started.")} else { panic!("Couldn't start containers.") };
 }
 
 fn stop_containers(containers: &Vec<&str>) -> () {
