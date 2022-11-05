@@ -2,6 +2,9 @@ use std::process;
 use std::process:: { Command };
 use std::env;
 use chrono::{self, Datelike};
+use notification::send_notification;
+
+mod notification;
 
 pub struct Config {
     pub dest_path: String,
@@ -13,7 +16,7 @@ pub struct Config {
 
 impl Config {
     pub fn build(args: &[String]) -> Result<Config, &'static str> {
-        if args.len() < 2 {
+        if args.len() < 3 {
             return Err("not enough arguments");
         }
         
@@ -86,7 +89,9 @@ fn local_rsync_backup(config: &Config) -> () {
         process::exit(1);
     });
 
-    if exec_rsync.success() {println!("Backup successful")} else { eprintln!("Backup failed") };
+    send_notification(exec_rsync.success()).unwrap_or_else(| err | {
+        println!("{}", err);
+    })
 
     
 }
