@@ -51,8 +51,11 @@ pub fn run() -> () {
     } else { 
         stop_containers(&running_containers);
     }
-    local_rsync_backup(&config);
-    if running_containers.len() > 0 { start_containers(&running_containers) } 
+    let backup_status = local_rsync_backup(&config);
+    if running_containers.len() > 0 { start_containers(&running_containers) }
+    send_notification(backup_status).unwrap_or_else(| err | {
+        println!("{}", err);
+    });
     ()
 }
 
@@ -78,7 +81,7 @@ fn check_running_containers() -> String {
     containers_list
 }
 
-fn local_rsync_backup(config: &Config) -> () {
+fn local_rsync_backup(config: &Config) -> bool {
     create_new_dir(&config);
     let mut rsync = Command::new("rsync");
     for dir in config.excluded_directories.split(",") {
@@ -89,9 +92,7 @@ fn local_rsync_backup(config: &Config) -> () {
         process::exit(1);
     });
 
-    send_notification(exec_rsync.success()).unwrap_or_else(| err | {
-        println!("{}", err);
-    })
+    exec_rsync.success()
 
     
 }
