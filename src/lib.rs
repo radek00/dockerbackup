@@ -62,10 +62,7 @@ pub fn run() -> () {
 
 fn check_docker() -> () {
 
-    let status = Command::new("docker").arg("--version").status().unwrap_or_else(| err | {
-        eprintln!("Error executing command: {}", err);
-        process::exit(1);
-    });
+    let status = Command::new("docker").arg("--version").status().expect("Docker command failed to start.");
     if status.success() {
         ()
     } else {
@@ -87,10 +84,7 @@ fn local_rsync_backup(config: &Config) -> bool {
     for dir in config.excluded_directories.split(",") {
         rsync.arg(format!("--exclude={}", dir));
     }
-    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
-        eprint!("Error executing rsync comand: {}", err);
-        process::exit(1);
-    });
+    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
 
     exec_rsync.success()
 
@@ -98,10 +92,7 @@ fn local_rsync_backup(config: &Config) -> bool {
 }
 
 fn create_new_dir(config: &Config) -> () {
-    let new_dir = Command::new("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir)).status().unwrap_or_else(| err | {
-        eprintln!("Error creating directory: {}", err);
-        process::exit(1);
-    });
+    let new_dir = Command::new("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Mkdir command failed to start.");
     if new_dir.success() { () } else { process::exit(1) }
 
 }
