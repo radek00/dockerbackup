@@ -2,6 +2,9 @@ use std::process;
 use std::process:: { Command };
 use std::env;
 use chrono::{self, Datelike};
+use notification::send_notification;
+
+mod notification;
 
 pub struct Config {
     pub dest_path: String,
@@ -13,7 +16,7 @@ pub struct Config {
 
 impl Config {
     pub fn build(args: &[String]) -> Result<Config, &'static str> {
-        if args.len() < 2 {
+        if args.len() < 3 {
             return Err("not enough arguments");
         }
         
@@ -48,8 +51,11 @@ pub fn run() -> () {
     } else { 
         stop_containers(&running_containers);
     }
-    local_rsync_backup(&config);
-    if running_containers.len() > 0 { start_containers(&running_containers) } 
+    let backup_status = local_rsync_backup(&config);
+    if running_containers.len() > 0 { start_containers(&running_containers) }
+    send_notification(backup_status).unwrap_or_else(| err | {
+        println!("{}", err);
+    });
     ()
 }
 
@@ -75,7 +81,7 @@ fn check_running_containers() -> String {
     containers_list
 }
 
-fn local_rsync_backup(config: &Config) -> () {
+fn local_rsync_backup(config: &Config) -> bool {
     create_new_dir(&config);
     let mut rsync = Command::new("rsync");
     for dir in config.excluded_directories.split(",") {
@@ -86,7 +92,7 @@ fn local_rsync_backup(config: &Config) -> () {
         process::exit(1);
     });
 
-    if exec_rsync.success() {println!("Backup successful")} else { eprintln!("Backup failed") };
+    exec_rsync.success()
 
     
 }
