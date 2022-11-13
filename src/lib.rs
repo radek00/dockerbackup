@@ -9,7 +9,6 @@ mod notification;
 pub struct Config {
     pub dest_path: String,
     pub new_dir: String,
-    //pub ssh_dest: String,
     pub volume_path: String,
     pub excluded_directories: String,
 }
@@ -24,7 +23,6 @@ impl Config {
 
         let dest_path = args[1].clone();
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
-        //let ssh_dest = args[2].clone();
         let volume_path = args[2].clone();
         let excluded_directories;
         if args.get(3).is_none() {
@@ -46,13 +44,25 @@ pub fn run() -> () {
     let containers = check_running_containers();
     let mut running_containers: Vec<&str> = containers.trim().split("\n").collect();
     running_containers.retain(|&x| !x.is_empty());
+
     if running_containers.len() == 0 {
         println!("No running containers found");
-    } else { 
-        stop_containers(&running_containers);
+    } else {
+        println!("Stopping containers...");
+        handle_containers(&running_containers, "stop").expect("Failed to stop containers");
     }
-    let backup_status = local_rsync_backup(&config);
-    if running_containers.len() > 0 { start_containers(&running_containers) }
+
+    let backup_status = local_rsync_backup(&config).unwrap_or_else(| err | {
+        println!("{}", err);
+        false
+    });
+
+    if running_containers.len() > 0 { 
+        println!("Starting containers...");
+        handle_containers(&running_containers, "start").unwrap_or_else(| err | {
+        println!("{}", err);
+    })}
+
     send_notification(backup_status).unwrap_or_else(| err | {
         println!("{}", err);
     });
@@ -78,33 +88,29 @@ fn check_running_containers() -> String {
     containers_list
 }
 
-fn local_rsync_backup(config: &Config) -> bool {
-    create_new_dir(&config);
+fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
+    if let None = create_new_dir(&config) {
+        return Err(Box::from("Could not create directory"))
+    } 
+
     let mut rsync = Command::new("rsync");
     for dir in config.excluded_directories.split(",") {
         rsync.arg(format!("--exclude={}", dir));
     }
     let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
 
-    exec_rsync.success()
+    if exec_rsync.success() { Ok(true) } else {Err(Box::from("Rsync backup failed"))}
+}
+
+fn create_new_dir(config: &Config) -> Option<()> {
+    let new_dir = Command::new("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Mkdir command failed to start.");
+    if new_dir.success() { Some(()) } else { None }
+
+}
+
+fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cmd_result = Command::new("docker").arg(command).args(containers).status().unwrap();
+    if cmd_result.success() { Ok(()) } else { Err(Box::from("Failed to handle containers")) }
 
     
-}
-
-fn create_new_dir(config: &Config) -> () {
-    let new_dir = Command::new("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Mkdir command failed to start.");
-    if new_dir.success() { () } else { process::exit(1) }
-
-}
-
-fn start_containers(containers: &Vec<&str>) -> () {
-    println!("Starting containers...");
-    let started = Command::new("docker").arg("start").args(containers).status().unwrap();
-    if started.success() {println!("Containers started.")} else { panic!("Couldn't start containers.") };
-}
-
-fn stop_containers(containers: &Vec<&str>) -> () {
-    println!("Stoppig containers...");
-    let status = Command::new("docker").arg("stop").args(containers).status().unwrap();
-    if status.success()  {println!("Containers stopped.")} else { panic!("Couldn't stop containers.") };
 }
