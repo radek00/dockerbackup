@@ -1,6 +1,6 @@
 use std::process;
 use std::process:: { Command };
-use std::env;
+use std::env::{self};
 use chrono::{self, Datelike};
 use notification::send_notification;
 
@@ -14,31 +14,34 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn build(args: &[String]) -> Result<Config, &'static str> {
-        if args.len() < 3 {
-            return Err("not enough arguments");
-        }
-        
+    pub fn build(mut args: env::Args) -> Result<Config, &'static str> {
+        args.next();
+
         let date = chrono::Local::now();
 
-        let dest_path = args[1].clone();
+        let dest_path = match args.next() {
+            Some(arg) => arg,
+            None => return Err("No destination path provided")
+            
+        };
+
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
-        let volume_path = args[2].clone();
-        let excluded_directories;
-        if args.get(3).is_none() {
-            excluded_directories = String::new();
-        } else {
-            excluded_directories = args[3].clone();
-        }
+        let volume_path = match args.next() {
+            Some(arg) => arg,
+            None => return Err("No volume path provided")
+        };
 
-
+        let excluded_directories = match args.next() {
+            Some(arg) => arg,
+            None => String::new()
+        };
+        
         Ok(Config { dest_path, new_dir, volume_path, excluded_directories })
     } 
 }
 
 pub fn run() -> () {
-    let args: Vec<String> = env::args().collect();
-    let config = Config::build(&args).unwrap();
+    let config = Config::build(env::args()).unwrap();
 
     check_docker();
     let containers = check_running_containers();
