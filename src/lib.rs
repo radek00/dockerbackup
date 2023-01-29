@@ -55,7 +55,11 @@ pub fn run() -> () {
         handle_containers(&running_containers, "stop").expect("Failed to stop containers");
     }
 
-    let backup_status = local_rsync_backup(&config).unwrap_or_else(| err | {
+    let backup_status = if config.dest_path.contains("@") {
+        local_rsync_backup(&config)
+    } else {
+        scp_backup(&config)
+    }.unwrap_or_else(| err | {
         println!("{}", err);
         false
     });
@@ -101,8 +105,13 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
         rsync.arg(format!("--exclude={}", dir));
     }
     let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
-
     if exec_rsync.success() { Ok(true) } else {Err(Box::from("Rsync backup failed"))}
+}
+
+fn scp_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
+    let exec_scp = Command::new("scp").arg("-r").arg(&config.volume_path).arg(format!("{}{}", config.dest_path, config.new_dir)).status().expect("Scp command failed.");
+
+    if exec_scp.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
 }
 
 fn create_new_dir(config: &Config) -> Option<()> {
