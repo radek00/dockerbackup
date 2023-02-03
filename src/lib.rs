@@ -1,4 +1,4 @@
-use std::process;
+use std::process::{self, Stdio};
 use std::process:: { Command };
 use std::env::{self};
 use chrono::{self, Datelike};
@@ -56,13 +56,15 @@ pub fn run() -> () {
     }
 
     let backup_status = if config.dest_path.contains("@") {
-        local_rsync_backup(&config)
-    } else {
         scp_backup(&config)
+    } else {
+        local_rsync_backup(&config)
     }.unwrap_or_else(| err | {
         println!("{}", err);
         false
     });
+
+    println!("{}", backup_status);
 
     if running_containers.len() > 0 { 
         println!("Starting containers...");
@@ -109,9 +111,14 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
 }
 
 fn scp_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-    let exec_scp = Command::new("scp").arg("-r").arg(&config.volume_path).arg(format!("{}{}", config.dest_path, config.new_dir)).status().expect("Scp command failed.");
+    let tar_volumes = Command::new("tar")
+        .arg("cv")
+        .arg("/home/radek/scpTesting")
+        .stdout(Stdio::piped()).spawn().unwrap();
+//let exec_scp = Command::new("scp").arg("-r").arg("-v").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Scp command failed.");
+    let ssh = Command::new("ssh").arg("radek00500@gmail.com@192.168.0.153").arg("cat > C:/Users/Radek>").stdin(Stdio::from(tar_volumes.stdout.unwrap())).status().unwrap();
 
-    if exec_scp.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
+    if ssh.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
 }
 
 fn create_new_dir(config: &Config) -> Option<()> {
