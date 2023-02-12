@@ -58,7 +58,8 @@ pub fn run() -> () {
     let backup_status = if config.dest_path.contains("@") {
         scp_backup(&config)
     } else {
-        local_rsync_backup(&config)
+        scp_backup(&config)
+        //local_rsync_backup(&config)
     }.unwrap_or_else(| err | {
         println!("{}", err);
         false
@@ -112,11 +113,18 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
 
 fn scp_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     let tar_volumes = Command::new("tar")
-        .arg("cv")
+        .arg("-cf-")
+        .arg("-C")
         .arg("/home/radek/scpTesting")
+        .arg(".")
         .stdout(Stdio::piped()).spawn().unwrap();
 //let exec_scp = Command::new("scp").arg("-r").arg("-v").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Scp command failed.");
-    let ssh = Command::new("ssh").arg("radek00500@gmail.com@192.168.0.153").arg("cat > C:/Users/Radek>").stdin(Stdio::from(tar_volumes.stdout.unwrap())).status().unwrap();
+    println!("{}", format!("{}/{}", config.dest_path, config.new_dir));
+    //use std::path::Path;
+    let ssh = Command::new("ssh").arg("radek00500@gmail.com@192.168.0.153")
+    .arg("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir))
+    .arg("tar").arg("-C").arg("D:/2023-2-12").arg("-xf-")
+    .stdin(Stdio::from(tar_volumes.stdout.unwrap())).status().unwrap();
 
     if ssh.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
 }
