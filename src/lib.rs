@@ -56,10 +56,9 @@ pub fn run() -> () {
     }
 
     let backup_status = if config.dest_path.contains("@") {
-        scp_backup(&config)
+        ssh_backup(&config)
     } else {
-        scp_backup(&config)
-        //local_rsync_backup(&config)
+        local_rsync_backup(&config)
     }.unwrap_or_else(| err | {
         println!("{}", err);
         false
@@ -111,20 +110,23 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
     if exec_rsync.success() { Ok(true) } else {Err(Box::from("Rsync backup failed"))}
 }
 
-fn scp_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-    let tar_volumes = Command::new("tar")
-        .arg("-cf-")
-        .arg("-C")
-        .arg("/home/radek/scpTesting")
-        .arg(".")
-        .stdout(Stdio::piped()).spawn().unwrap();
-//let exec_scp = Command::new("scp").arg("-r").arg("-v").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Scp command failed.");
-    println!("{}", format!("{}/{}", config.dest_path, config.new_dir));
-    //use std::path::Path;
-    let ssh = Command::new("ssh").arg("radek00500@gmail.com@192.168.0.153")
-    .arg("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir))
-    .arg("tar").arg("-C").arg("D:/2023-2-12").arg("-xf-")
-    .stdin(Stdio::from(tar_volumes.stdout.unwrap())).status().unwrap();
+fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut tar_volumes = Command::new("tar");
+
+    tar_volumes.arg("-cf-").arg("-C").arg(&config.volume_path);
+
+    
+    for dir in config.excluded_directories.split(",") {
+        tar_volumes.arg(format!("--exclude={}", dir));
+    }
+    let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn().unwrap();
+
+    let path: Vec<&str> = config.dest_path.split("/").collect();
+
+    let ssh = Command::new("ssh").arg(path[0])
+    .arg("mkdir").arg(format!("{}\\{}", path[1], config.new_dir)).arg("&&")
+    .arg("tar").arg("-C").arg(format!("{}\\{}", path[1], config.new_dir)).arg("-xf-")
+    .stdin(Stdio::from(tar_exec.stdout.unwrap())).status().unwrap();
 
     if ssh.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
 }
