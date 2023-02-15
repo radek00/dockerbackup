@@ -115,10 +115,8 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
 
     tar_volumes.arg("-cf-").arg("-C").arg(&config.volume_path);
 
-    
-    for dir in config.excluded_directories.split(",") {
-        tar_volumes.arg(format!("--exclude={}", dir));
-    }
+    exclude_dirs(&mut tar_volumes, &config.excluded_directories);
+
     let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn().unwrap();
 
     let path: Vec<&str> = config.dest_path.split("/").collect();
@@ -129,6 +127,12 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     .stdin(Stdio::from(tar_exec.stdout.unwrap())).status().unwrap();
 
     if ssh.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
+}
+
+fn exclude_dirs(command: &mut Command, dirs_to_exclude: &String) -> () {
+    for dir in dirs_to_exclude.split(",") {
+        command.arg(format!("--exclude={}", dir));
+    }
 }
 
 fn create_new_dir(config: &Config) -> Option<()> {
