@@ -1,4 +1,4 @@
-use std::process;
+use std::process::{self, Stdio};
 use std::process:: { Command };
 use std::env::{self};
 use chrono::{self, Datelike};
@@ -55,7 +55,11 @@ pub fn run() -> () {
         handle_containers(&running_containers, "stop").expect("Failed to stop containers");
     }
 
-    let backup_status = local_rsync_backup(&config).unwrap_or_else(| err | {
+    let backup_status = if config.dest_path.contains("@") {
+        ssh_backup(&config)
+    } else {
+        local_rsync_backup(&config)
+    }.unwrap_or_else(| err | {
         println!("{}", err);
         false
     });
@@ -97,12 +101,36 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
     } 
 
     let mut rsync = Command::new("rsync");
-    for dir in config.excluded_directories.split(",") {
-        rsync.arg(format!("--exclude={}", dir));
-    }
-    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
 
+    exclude_dirs(&mut rsync, &config.excluded_directories);
+
+    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
     if exec_rsync.success() { Ok(true) } else {Err(Box::from("Rsync backup failed"))}
+}
+
+fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut tar_volumes = Command::new("tar");
+
+    tar_volumes.arg("-cf-").arg("-C").arg(&config.volume_path);
+
+    exclude_dirs(&mut tar_volumes, &config.excluded_directories);
+
+    let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn().unwrap();
+
+    let path: Vec<&str> = config.dest_path.split("/").collect();
+
+    let ssh = Command::new("ssh").arg(path[0])
+    .arg("mkdir").arg(format!("{}\\{}", path[1], config.new_dir)).arg("&&")
+    .arg("tar").arg("-C").arg(format!("{}\\{}", path[1], config.new_dir)).arg("-xf-")
+    .stdin(Stdio::from(tar_exec.stdout.unwrap())).status().unwrap();
+
+    if ssh.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
+}
+
+fn exclude_dirs(command: &mut Command, dirs_to_exclude: &String) -> () {
+    for dir in dirs_to_exclude.split(",") {
+        command.arg(format!("--exclude={}", dir));
+    }
 }
 
 fn create_new_dir(config: &Config) -> Option<()> {
@@ -114,6 +142,4 @@ fn create_new_dir(config: &Config) -> Option<()> {
 fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cmd_result = Command::new("docker").arg(command).args(containers).status().unwrap();
     if cmd_result.success() { Ok(()) } else { Err(Box::from("Failed to handle containers")) }
-
-    
 }
