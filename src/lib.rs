@@ -64,8 +64,6 @@ pub fn run() -> () {
         false
     });
 
-    println!("{}", backup_status);
-
     if running_containers.len() > 0 { 
         println!("Starting containers...");
         handle_containers(&running_containers, "start").unwrap_or_else(| err | {
@@ -103,9 +101,9 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
     } 
 
     let mut rsync = Command::new("rsync");
-    for dir in config.excluded_directories.split(",") {
-        rsync.arg(format!("--exclude={}", dir));
-    }
+
+    exclude_dirs(&mut rsync, &config.excluded_directories);
+
     let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
     if exec_rsync.success() { Ok(true) } else {Err(Box::from("Rsync backup failed"))}
 }
@@ -144,6 +142,4 @@ fn create_new_dir(config: &Config) -> Option<()> {
 fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cmd_result = Command::new("docker").arg(command).args(containers).status().unwrap();
     if cmd_result.success() { Ok(()) } else { Err(Box::from("Failed to handle containers")) }
-
-    
 }
