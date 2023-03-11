@@ -18,7 +18,7 @@ pub fn send_notification(success: bool) -> Result<(), Box<dyn std::error::Error>
             .header("Content-Type", "application/json")
             .json(&map)
             .send();
-    if _req.expect("Request error.").status().is_success() {
+    if _req?.status().is_success() {
         Ok(())
     } else { Err(Box::from("Error sending request to gotify"))}
  
