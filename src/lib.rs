@@ -119,9 +119,11 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
 
     let path: Vec<&str> = config.dest_path.split("/").collect();
 
+    let dest_path = append_to_path(path[1], &config.new_dir);
+
     let ssh = Command::new("ssh").arg(path[0])
     .arg("mkdir").arg(format!("{}\\{}", path[1], config.new_dir)).arg("&&")
-    .arg("tar").arg("-C").arg(format!("{}\\{}", path[1], config.new_dir)).arg("-xf-")
+    .arg("tar").arg("-C").arg(dest_path).arg("-xf-")
     .stdin(Stdio::from(tar_exec.stdout.unwrap())).status()?;
 
     if ssh.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
@@ -142,4 +144,12 @@ fn create_new_dir(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
 fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cmd_result = Command::new("docker").arg(command).args(containers).status()?;
     if cmd_result.success() { Ok(()) } else { Err(Box::from("Failed to handle containers")) }
+}
+
+fn append_to_path(path: &str, new_dir: &String) -> String {
+    if path.contains("\\") {
+        format!("{}\\{}", path, new_dir)
+    } else {
+        format!("{}/{}", path, new_dir)
+    }
 }
