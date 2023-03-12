@@ -1,10 +1,7 @@
-use std::process::{self, Stdio };
+use std::process::{ Stdio };
 use std::process:: { Command };
 use std::env::{self};
 use chrono::{self, Datelike};
-use notification::send_notification;
-
-mod notification;
 
 pub struct Config {
     pub dest_path: String,
@@ -40,11 +37,10 @@ impl Config {
     } 
 }
 
-pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::build(env::args()).expect("Failed building config struct");
-
-    check_docker();
-    let containers = check_running_containers().expect("Couldn't check for running containers");
+pub fn run() -> Result<bool, Box<dyn std::error::Error>> {
+    let config = Config::build(env::args())?;
+    check_docker()?;
+    let containers = check_running_containers()?;
     let mut running_containers: Vec<&str> = containers.trim().split("\n").collect();
     running_containers.retain(|&x| !x.is_empty());
 
@@ -52,38 +48,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("No running containers found");
     } else {
         println!("Stopping containers...");
-        handle_containers(&running_containers, "stop").expect("Failed to stop containers");
+        handle_containers(&running_containers, "stop")?
     }
 
     let backup_status = if config.dest_path.contains("@") {
         ssh_backup(&config)
     } else {
         local_rsync_backup(&config)
-    }.unwrap_or_else(| err | {
-        println!("{}", err);
-        false
-    });
+    }?;
 
     if running_containers.len() > 0 { 
         println!("Starting containers...");
         handle_containers(&running_containers, "start")?;
     }
-
-    send_notification(backup_status)?;
-    Ok(())
+    Ok(backup_status)
 }
 
 
-fn check_docker() -> () {
-
-    let status = Command::new("docker").arg("--version").status().expect("Docker command failed to start.");
-    if status.success() {
-        ()
-    } else {
-        eprintln!("Can't continue without docker installed");
-        process::exit(1);
-    }
-    
+fn check_docker() -> Result<(), Box<dyn std::error::Error>> {
+    let status = Command::new("docker").arg("--version").status()?;
+    if status.success() { return Ok(()) }
+    Err(Box::from("Can't continue without Docker installed"))
 }
 
 fn check_running_containers() -> Result<String, Box<dyn std::error::Error>> {
@@ -102,7 +87,8 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
     exclude_dirs(&mut rsync, &config.excluded_directories);
 
     let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
-    if exec_rsync.success() { Ok(true) } else {Err(Box::from("Rsync backup failed"))}
+    if exec_rsync.success() { return  Ok(true) }
+    Err(Box::from("Rsync backup failed"))
 }
 
 fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
@@ -123,7 +109,8 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     .arg("tar").arg("-C").arg(dest_path).arg("-xf-")
     .stdin(Stdio::from(tar_exec.stdout.unwrap())).status()?;
 
-    if ssh.success() { Ok(true) } else {Err(Box::from("Scp backup failed"))}
+    if ssh.success() { return Ok(true) } 
+    Err(Box::from("Ssh backup failed"))
 }
 
 fn exclude_dirs(command: &mut Command, dirs_to_exclude: &String) -> () {
@@ -135,12 +122,12 @@ fn exclude_dirs(command: &mut Command, dirs_to_exclude: &String) -> () {
 fn create_new_dir(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     let new_dir = Command::new("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir)).status()?;
     Ok(new_dir.success())
-
 }
 
 fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Box<dyn std::error::Error>> {
     let cmd_result = Command::new("docker").arg(command).args(containers).status()?;
-    if cmd_result.success() { Ok(()) } else { Err(Box::from("Failed to handle containers")) }
+    if cmd_result.success() { return Ok(()) }
+    Err(Box::from("Failed to handle containers"))
 }
 
 fn append_to_path(path: &str, new_dir: &String) -> String {
