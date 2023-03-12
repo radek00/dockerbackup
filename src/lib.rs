@@ -86,7 +86,7 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
 
     exclude_dirs(&mut rsync, &config.excluded_directories);
 
-    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status().expect("Rsync command failed to start.");
+    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status()?;
     if exec_rsync.success() { return  Ok(true) }
     Err(Box::from("Rsync backup failed"))
 }
