@@ -40,7 +40,7 @@ impl Config {
     } 
 }
 
-pub fn run() -> () {
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::build(env::args()).expect("Failed building config struct");
 
     check_docker();
@@ -66,14 +66,11 @@ pub fn run() -> () {
 
     if running_containers.len() > 0 { 
         println!("Starting containers...");
-        handle_containers(&running_containers, "start").unwrap_or_else(| err | {
-        println!("{}", err);
-    })}
+        handle_containers(&running_containers, "start")?;
+    }
 
-    send_notification(backup_status).unwrap_or_else(| err | {
-        println!("{}", err);
-    });
-    ()
+    send_notification(backup_status)?;
+    Ok(())
 }
 
 

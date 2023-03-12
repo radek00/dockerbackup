@@ -1,4 +1,9 @@
 use dockerbackup;
 fn main() {
-    dockerbackup::run();
+    match dockerbackup::run()  {
+        Ok(()) => (),
+        Err(err) => {
+            println!("{}", err);
+        }
+    }
 }
