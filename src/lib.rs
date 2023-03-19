@@ -2,6 +2,9 @@ use std::process::{ Stdio };
 use std::process:: { Command };
 use std::env::{self};
 use chrono::{self, Datelike};
+use notification::send_notification;
+
+mod notification;
 
 pub struct Config {
     pub dest_path: String,
@@ -37,19 +40,36 @@ impl Config {
     } 
 }
 
-pub fn run() -> Result<bool, Box<dyn std::error::Error>> {
-    let config = Config::build(env::args())?;
+pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
     check_docker()?;
+    let mut err_message = String::from("");
     let containers = check_running_containers()?;
     let mut running_containers: Vec<&str> = containers.trim().split("\n").collect();
     running_containers.retain(|&x| !x.is_empty());
 
-    if running_containers.len() == 0 {
-        println!("No running containers found");
+    let err_closure = | err | {
+        err_message = format!("{}", err);
+        false
+    };
+
+    let backup_status;
+
+    if running_containers.len() > 0 {
+        println!("Stopping containers..."); 
+        handle_containers(&running_containers, "stop")?;
+        backup_status =  run().unwrap_or_else(err_closure);
+        println!("Starting containers...");
+        handle_containers(&running_containers, "start")?;
     } else {
-        println!("Stopping containers...");
-        handle_containers(&running_containers, "stop")?
+        backup_status = run().unwrap_or_else(err_closure);
     }
+
+    send_notification(backup_status, format!("{}", err_message))?;
+    Ok(())
+}
+
+fn run() -> Result<bool, Box<dyn std::error::Error>> {
+    let config = Config::build(env::args())?;
 
     let backup_status = if config.dest_path.contains("@") {
         ssh_backup(&config)
@@ -57,10 +77,6 @@ pub fn run() -> Result<bool, Box<dyn std::error::Error>> {
         local_rsync_backup(&config)
     }?;
 
-    if running_containers.len() > 0 { 
-        println!("Starting containers...");
-        handle_containers(&running_containers, "start")?;
-    }
     Ok(backup_status)
 }
 
