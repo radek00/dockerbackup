@@ -38,7 +38,7 @@ impl Config {
                 .required(false)
                 .short('e')
                 .long("exclude")
-                .num_args(2))
+                .num_args(1..))
             .get_matches();
 
         let dest_path = matches.get_one::<String>("dest_path").unwrap().to_string();
