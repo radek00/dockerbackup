@@ -139,10 +139,10 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     let ssh = Command::new("ssh").arg(path[0])
     .arg("mkdir").arg(format!("{}\\{}", path[1], config.new_dir)).arg("&&")
     .arg("tar").arg("-C").arg(dest_path).arg("-xf-")
-    .stdin(Stdio::from(tar_exec.stdout.unwrap())).status()?;
+    .stdin(Stdio::from(tar_exec.stdout.unwrap())).output()?;
 
-    if ssh.success() { return Ok(true) } 
-    Err(Box::from("Ssh backup failed"))
+    if ssh.status.success() { return Ok(true) } 
+    Err(Box::from(format!("Ssh backup failed: {}", String::from_utf8_lossy(&ssh.stderr))))
 }
 
 fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) -> () {
