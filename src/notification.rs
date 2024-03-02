@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::{thread, time};
 
 pub fn send_notification(success: bool, msg: String) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", msg);
     let mut map: HashMap<&str, String> = HashMap::new();
     let message;
     if success {
