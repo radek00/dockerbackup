@@ -1,7 +1,7 @@
-use std::process::{ Stdio };
-use std::process:: { Command };
-use std::env::{self};
+use std::process:: Stdio;
+use std::process::Command;
 use chrono::{self, Datelike};
+use clap;
 use notification::send_notification;
 
 mod notification;
@@ -10,37 +10,47 @@ pub struct Config {
     pub dest_path: String,
     pub new_dir: String,
     pub volume_path: String,
-    pub excluded_directories: String,
+    pub excluded_directories: Vec<String>,
 }
 
 impl Config {
-    pub fn build(mut args: env::Args) -> Result<Config, &'static str> {
-        args.next();
-
+    pub fn build() -> Result<Config, &'static str> {
         let date = chrono::Local::now();
-
-        let dest_path = match args.next() {
-            Some(arg) => arg,
-            None => return Err("No destination path provided")
-            
-        };
-
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
-        let volume_path = match args.next() {
-            Some(arg) => arg,
-            None => return Err("No volume path provided")
-        };
 
-        let excluded_directories = match args.next() {
-            Some(arg) => arg,
-            None => String::new()
-        };
-        
+        let matches = clap::Command::new("Docker Backup")
+            .version("1.0")
+            .author("Your Name <your.email@example.com>")
+            .about("Performs a backup over SSH")
+            .arg(clap::Arg::new("dest_path")
+                .help("Backup destination path. Pass remote ssh path or local")
+                .required(true)
+                .short('d')
+                .long("destiation"))
+            .arg(clap::Arg::new("volume_path")
+                .help("Path to docker volumes")
+                .default_value("/var/lib/docker/volumes")
+                .required(false)
+                .short('v')
+                .long("volume_path"))
+            .arg(clap::Arg::new("excluded_directories")
+                .help("Directories to exclude from the backup")
+                .required(false)
+                .short('e')
+                .long("exclude")
+                .num_args(2))
+            .get_matches();
+
+        let dest_path = matches.get_one::<String>("dest_path").unwrap().to_string();
+        let volume_path = matches.get_one::<String>("volume_path").unwrap().to_string();
+        let excluded_directories: Vec<String> = matches.get_many::<String>("excluded_directories").unwrap().map(| dir | String::from(dir)).collect();
+
         Ok(Config { dest_path, new_dir, volume_path, excluded_directories })
     } 
 }
 
 pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::build().unwrap();
     check_docker()?;
     let mut err_message = String::from("");
     let containers = check_running_containers()?;
@@ -57,19 +67,18 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
     if running_containers.len() > 0 {
         println!("Stopping containers..."); 
         handle_containers(&running_containers, "stop")?;
-        backup_status =  run().unwrap_or_else(err_closure);
+        backup_status =  run(&config).unwrap_or_else(err_closure);
         println!("Starting containers...");
         handle_containers(&running_containers, "start")?;
     } else {
-        backup_status = run().unwrap_or_else(err_closure);
+        backup_status = run(&config).unwrap_or_else(err_closure);
     }
 
     send_notification(backup_status, format!("{}", err_message))?;
     Ok(())
 }
 
-fn run() -> Result<bool, Box<dyn std::error::Error>> {
-    let config = Config::build(env::args())?;
+fn run(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
 
     let backup_status = if config.dest_path.contains("@") {
         ssh_backup(&config)
@@ -129,8 +138,8 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     Err(Box::from("Ssh backup failed"))
 }
 
-fn exclude_dirs(command: &mut Command, dirs_to_exclude: &String) -> () {
-    for dir in dirs_to_exclude.split(",") {
+fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) -> () {
+    for dir in dirs_to_exclude {
         command.arg(format!("--exclude={}", dir));
     }
 }

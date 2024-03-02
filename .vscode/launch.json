@@ -39,9 +39,8 @@
                 }
             },
             "args": [
-                "radek00500@gmail.com@192.168.0.153/H:/ServerBackups",
-                "/var/lib/docker/volumes",
-                "'backingFsBlockDev'"
+                "-d", "radek00500@gmail.com@192.168.0.153/H:/ServerBackups",
+                "-e", "backingFsBlockDev", "test",
             ],
             "cwd": "${workspaceFolder}"
         },
