@@ -43,10 +43,17 @@ impl Config {
 
         let dest_path = matches.get_one::<String>("dest_path").unwrap().to_string();
         let volume_path = matches.get_one::<String>("volume_path").unwrap().to_string();
-        let excluded_directories: Vec<String> = matches.get_many::<String>("excluded_directories").unwrap().map(| dir | String::from(dir)).collect();
+        
+        let mut excluded_directories = match matches.get_many::<String>("excluded_directories") {
+            Some(dirs) => {
+                dirs.map(| dir | dir.to_string()).collect()
+            },
+            None => vec![],
+        };
 
-        Ok(Config { dest_path, new_dir, volume_path, excluded_directories })
-    } 
+        excluded_directories.push(String::from("backingFsBlockDev"));
+        Ok(Config { dest_path, new_dir, volume_path, excluded_directories }) 
+    }
 }
 
 pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
