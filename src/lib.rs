@@ -20,21 +20,20 @@ impl Config {
 
         let matches = clap::Command::new("Docker Backup")
             .version("1.0")
-            .author("Your Name <your.email@example.com>")
-            .about("Performs a backup over SSH")
+            .author("radek00")
+            .about("Simple docker backup tool to perform backups to local destination or remote ssh server")
             .arg(clap::Arg::new("dest_path")
-                .help("Backup destination path. Pass remote ssh path or local")
+                .help("Backup destination path. Accepts local or remote ssh path. Example: /backup or user@host:/backup")
                 .required(true)
                 .short('d')
-                .long("destiation"))
+                .long("destination"))
             .arg(clap::Arg::new("volume_path")
-                .help("Path to docker volumes")
+                .help("Path to docker volumes directory")
                 .default_value("/var/lib/docker/volumes")
                 .required(false)
-                .short('v')
-                .long("volume_path"))
-            .arg(clap::Arg::new("excluded_directories")
-                .help("Directories to exclude from the backup")
+                .long("volumes"))
+            .arg(clap::Arg::new("excluded_volumes")
+                .help("Volumes to exclude from the backup")
                 .required(false)
                 .short('e')
                 .long("exclude")
@@ -44,7 +43,7 @@ impl Config {
         let dest_path = matches.get_one::<String>("dest_path").unwrap().to_string();
         let volume_path = matches.get_one::<String>("volume_path").unwrap().to_string();
         
-        let mut excluded_directories = match matches.get_many::<String>("excluded_directories") {
+        let mut excluded_directories = match matches.get_many::<String>("excluded_volumes") {
             Some(dirs) => {
                 dirs.map(| dir | dir.to_string()).collect()
             },
@@ -57,7 +56,7 @@ impl Config {
 }
 
 pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::build().unwrap();
+    let config = Config::build()?;
     check_docker()?;
     let mut err_message = String::from("");
     let containers = check_running_containers()?;
