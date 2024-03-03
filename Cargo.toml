@@ -1,5 +1,5 @@
 [package]
-name = "docker_backup"
+name = "dockerbackup"
 version = "0.1.0"
 edition = "2021"
 authors = ["Radek"]
