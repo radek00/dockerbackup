@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Radek"]
 license = "MIT OR Apache-2.0"
-description = "Simple tool for backing up docker volumes. Work in progress"
+description = "This is a simple Docker backup tool. It allows you to automatically stop running containers and backup Docker volumes to local or remote destination."
 readme = "README.md"
-homepage = "https://github.com/Radekor500/dockerbackup"
-repository = "https://github.com/Radekor500/dockerbackup"
+homepage = "https://github.com/radek00/dockerbackup"
+repository = "https://github.com/radek00/dockerbackup"
 keywords = ["cli", "backup", "docker"]
 categories = ["command-line-utilities"]
 

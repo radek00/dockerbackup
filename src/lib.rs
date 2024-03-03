@@ -19,7 +19,7 @@ impl Config {
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
 
         let matches = clap::Command::new("Docker Backup")
-            .version("1.0")
+            .version("0.1.0")
             .author("radek00")
             .about("Simple docker backup tool to perform backups to local destination or remote ssh server")
             .arg(clap::Arg::new("dest_path")
