@@ -1,6 +1,6 @@
 # About
 
-This is a simple Docker backup. It allows you to automatically stop running containers and backup Docker volumes to local or remote destination.
+This is a simple Docker backup tool. It allows you to automatically stop running containers and backup Docker volumes to local or remote destination.
 
 ## Features
 
