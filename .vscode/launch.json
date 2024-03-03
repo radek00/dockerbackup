@@ -41,6 +41,8 @@
             "args": [
                 "-d", "radek00500@gmail.com@192.168.0.153/H:/ServerBackups",
                 "-e", "backingFsBlockDev", "test",
+                "-g", "https://gotify.radekserver.xyz/message?token=AOAga4xZ8pQ5c9Y",
+                "--discord", "https://discord.com/api/webhooks/834790048737787915/VRT0VxsD0QrLpYSvKB0BY5dRyv17TV8nz5-uSlOQxPgDGGqQGydePVqpiKI9TXYKdegk",
             ],
             "cwd": "${workspaceFolder}"
         },
