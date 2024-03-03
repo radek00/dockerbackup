@@ -3,6 +3,8 @@ use std::process::Command;
 use chrono::{self, Datelike};
 use clap;
 use notification::send_notification;
+use notification::Discord;
+use notification::Gotify;
 
 mod notification;
 
@@ -11,6 +13,8 @@ pub struct Config {
     pub new_dir: String,
     pub volume_path: String,
     pub excluded_directories: Vec<String>,
+    pub gotify_url: Option<String>,
+    pub discord_url: Option<String>,
 }
 
 impl Config {
@@ -38,6 +42,15 @@ impl Config {
                 .short('e')
                 .long("exclude")
                 .num_args(1..))
+            .arg(clap::Arg::new("gotify_url")
+                .help("Gotify server url for notifications")
+                .required(false)
+                .short('g')
+                .long("gotify"))
+            .arg(clap::Arg::new("discord_url")
+                .help("Discord webhook url for notifications")
+                .required(false)
+                .long("discord"))
             .get_matches();
 
         let dest_path = matches.get_one::<String>("dest_path").unwrap().to_string();
@@ -51,7 +64,17 @@ impl Config {
         };
 
         excluded_directories.push(String::from("backingFsBlockDev"));
-        Ok(Config { dest_path, new_dir, volume_path, excluded_directories }) 
+
+        let gotify_url: Option<String> = match matches.get_one::<String>("gotify_url") {
+            Some(url) => Some(url.to_string()),
+            None => None,
+        };
+
+        let discord_url: Option<String> = match matches.get_one::<String>("discord_url") {
+            Some(url) => Some(url.to_string()),
+            None => None,
+        };
+        Ok(Config { dest_path, new_dir, volume_path, excluded_directories, gotify_url, discord_url }) 
     }
 }
 
@@ -80,7 +103,16 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
         backup_status = run(&config).unwrap_or_else(err_closure);
     }
 
-    send_notification(backup_status, format!("{}", err_message))?;
+    match config.gotify_url {
+        Some(url) => send_notification::<Gotify>(Gotify {err_message: &err_message, success: backup_status, url: &url})?,
+        None => (),
+        
+    }
+
+    match config.discord_url {
+        Some(url) => send_notification::<Discord>(Discord {err_message: &err_message, success: backup_status, url: &url})?,
+        None => (),
+    }
     Ok(())
 }
 
