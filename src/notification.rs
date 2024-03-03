@@ -31,14 +31,21 @@ impl<'a> Notification for Gotify<'a> {
         map.insert("message", message);
         //thread::sleep(time::Duration::from_secs(60));
         let client = reqwest::blocking::Client::new();
-        let _req = client.post(self.url)
-                .header("Accept", "application/json")
-                .header("Content-Type", "application/json")
-                .json(&map)
-                .send();
-        if _req?.status().is_success() {
-            Ok(())
-        } else { Err(Box::from("Error sending request to gotify"))}
+        
+        for _ in 0..10 {
+            let _req = client.post(self.url)
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/json")
+                    .json(&map)
+                    .send();
+            if let Ok(response) = _req {
+                if response.status().is_success() {
+                    return Ok(());
+                }
+            }
+            thread::sleep(time::Duration::from_secs(10));
+        }
+        Err(Box::from("Error sending request to gotify after 10 attempts"))
      
     }
 }
