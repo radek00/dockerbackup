@@ -1,26 +1,84 @@
 use std::collections::HashMap;
 use std::{thread, time};
 
-pub fn send_notification(success: bool, msg: String) -> Result<(), Box<dyn std::error::Error>> {
-    println!("{}", msg);
-    let mut map: HashMap<&str, String> = HashMap::new();
-    let message;
-    if success {
-        message = String::from("Backup successful");
-    } else {
-        message = format!("Backup failed \n Error message: {}", msg);
+pub trait Notification {
+    fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+pub struct Gotify<'a> {
+    pub err_message: &'a String,
+    pub url: &'a String,
+    pub success: bool,
+}
+
+pub struct Discord<'a> {
+    pub err_message: &'a String,
+    pub url: &'a String,
+    pub success: bool,
+}
+
+impl<'a> Notification for Gotify<'a> {
+    fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("{}", self.err_message);
+        let mut map: HashMap<&str, String> = HashMap::new();
+        let message;
+        if self.success {
+            message = String::from("Backup successful");
+        } else {
+            message = format!("Backup failed \n Error message: {}", self.err_message);
+        }
+        map.insert("title", String::from("Backup result"));
+        map.insert("message", message);
+        //thread::sleep(time::Duration::from_secs(60));
+        let client = reqwest::blocking::Client::new();
+        let _req = client.post(self.url)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json(&map)
+                .send();
+        if _req?.status().is_success() {
+            Ok(())
+        } else { Err(Box::from("Error sending request to gotify"))}
+     
     }
-    map.insert("title", String::from("Backup result"));
-    map.insert("message", message);
-    thread::sleep(time::Duration::from_secs(60));
-    let client = reqwest::blocking::Client::new();
-    let _req = client.post("https://gotify.radekserver.xyz/message?token=AOAga4xZ8pQ5c9Y")
-            .header("Accept", "application/json")
-            .header("Content-Type", "application/json")
-            .json(&map)
-            .send();
-    if _req?.status().is_success() {
-        Ok(())
-    } else { Err(Box::from("Error sending request to gotify"))}
- 
+}
+
+impl<'a> Notification for Discord<'a> {
+    fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("{}", self.err_message);
+        let json = format!(r#"
+        {{
+            "embeds": [
+                {{
+                    "title": "Docker backup result",
+                    "fields": [
+                        {{
+                            "name": "Status",
+                            "value": "{}"
+                        }},
+                        {{
+                            "name": "Error Message",
+                            "value": "{}"
+                        }}
+                    ]
+                }}
+            ]
+        }}
+    "#, self.success, self.err_message);
+        //thread::sleep(time::Duration::from_secs(60));
+        let client = reqwest::blocking::Client::new();
+        let _req = client.post(self.url)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .body(json)
+                .send();
+        if _req?.status().is_success() {
+            Ok(())
+        } else { Err(Box::from("Error sending notification to discord"))}
+     
+    }
+}
+
+pub fn send_notification<T: Notification>(notification: T) -> Result<(), Box<dyn std::error::Error>> {
+    notification.send_notification()
 }
