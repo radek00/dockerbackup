@@ -32,7 +32,8 @@ impl<'a> Notification for Gotify<'a> {
         //thread::sleep(time::Duration::from_secs(60));
         let client = reqwest::blocking::Client::new();
         
-        for _ in 0..10 {
+        for attempt in 0..10 {
+            println!("Sending request to Gotify.Attempt {}", attempt);
             let _req = client.post(self.url)
                     .header("Accept", "application/json")
                     .header("Content-Type", "application/json")
