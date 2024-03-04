@@ -29,7 +29,6 @@ impl<'a> Notification for Gotify<'a> {
         }
         map.insert("title", String::from("Backup result"));
         map.insert("message", message);
-        //thread::sleep(time::Duration::from_secs(60));
         let client = reqwest::blocking::Client::new();
         
         for attempt in 0..10 {
@@ -54,26 +53,28 @@ impl<'a> Notification for Gotify<'a> {
 impl<'a> Notification for Discord<'a> {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", self.err_message);
+
+        let status_field = format!(r#"{{
+            "name": "Status",
+            "value": "{}"
+        }}"#, if self.success { "Success" } else { "Failed" });
+        let error_message_field = format!(r#",{{
+            "name": "Error Message",
+            "value": "{}"
+        }}"#, if self.err_message.is_empty() { "No error message" } else { self.err_message });
         let json = format!(r#"
         {{
             "embeds": [
                 {{
                     "title": "Docker backup result",
                     "fields": [
-                        {{
-                            "name": "Status",
-                            "value": "{}"
-                        }},
-                        {{
-                            "name": "Error Message",
-                            "value": "{}"
-                        }}
+                        {}
+                        {}
                     ]
                 }}
             ]
         }}
-    "#, self.success, self.err_message);
-        //thread::sleep(time::Duration::from_secs(60));
+    "#, status_field, error_message_field);
         let client = reqwest::blocking::Client::new();
         let _req = client.post(self.url)
                 .header("Accept", "application/json")
