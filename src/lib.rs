@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process:: Stdio;
 use std::process::Command;
 use chrono::{self, Datelike};
@@ -11,7 +12,7 @@ mod notification;
 pub struct Config {
     pub dest_path: String,
     pub new_dir: String,
-    pub volume_path: String,
+    pub volume_path: PathBuf,
     pub excluded_directories: Vec<String>,
     pub gotify_url: Option<String>,
     pub discord_url: Option<String>,
@@ -22,7 +23,7 @@ impl Config {
         let date = chrono::Local::now();
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
 
-        let matches = clap::Command::new("Docker Backup")
+        let mut matches = clap::Command::new("Docker Backup")
             .version("0.1.0")
             .author("radek00")
             .about("Simple docker backup tool to perform backups to local destination or remote ssh server")
@@ -33,6 +34,7 @@ impl Config {
                 .long("destination"))
             .arg(clap::Arg::new("volume_path")
                 .help("Path to docker volumes directory")
+                .value_parser(clap::value_parser!(PathBuf))
                 .default_value("/var/lib/docker/volumes")
                 .required(false)
                 .long("volumes"))
@@ -52,29 +54,17 @@ impl Config {
                 .required(false)
                 .long("discord"))
             .get_matches();
-
-        let dest_path = matches.get_one::<String>("dest_path").unwrap().to_string();
-        let volume_path = matches.get_one::<String>("volume_path").unwrap().to_string();
         
-        let mut excluded_directories = match matches.get_many::<String>("excluded_volumes") {
+        let mut excluded_directories = match matches.remove_many::<String>("excluded_volumes") {
             Some(dirs) => {
-                dirs.map(| dir | dir.to_string()).collect()
+                dirs.collect()
             },
             None => vec![],
         };
 
         excluded_directories.push(String::from("backingFsBlockDev"));
 
-        let gotify_url: Option<String> = match matches.get_one::<String>("gotify_url") {
-            Some(url) => Some(url.to_string()),
-            None => None,
-        };
-
-        let discord_url: Option<String> = match matches.get_one::<String>("discord_url") {
-            Some(url) => Some(url.to_string()),
-            None => None,
-        };
-        Ok(Config { dest_path, new_dir, volume_path, excluded_directories, gotify_url, discord_url }) 
+        Ok(Config { dest_path: matches.remove_one::<String>("dest_path").unwrap(), new_dir, volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(), excluded_directories, gotify_url:  matches.remove_one::<String>("gotify_url"), discord_url: matches.remove_one::<String>("discord_url") }) 
     }
 }
 
