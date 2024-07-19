@@ -25,7 +25,7 @@ impl DockerBackup {
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
 
         let mut matches = clap::Command::new("Docker Backup")
-            .version("0.1.0")
+            .version(env!("CARGO_PKG_VERSION"))
             .author("radek00")
             .about("Simple docker backup tool to perform backups to local destination or remote ssh server")
             .styles(Styles::styled()
