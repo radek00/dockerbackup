@@ -1,5 +1,4 @@
 use chrono::{self, Datelike};
-use clap;
 use notification::send_notification;
 use notification::Discord;
 use notification::Gotify;
@@ -79,7 +78,7 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
     check_docker()?;
     let mut err_message = String::from("");
     let containers = check_running_containers()?;
-    let mut running_containers: Vec<&str> = containers.trim().split("\n").collect();
+    let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
     running_containers.retain(|&x| !x.is_empty());
 
     let err_closure = |err| {
@@ -89,7 +88,7 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
 
     let backup_status;
 
-    if running_containers.len() > 0 {
+    if !running_containers.is_empty() {
         println!("Stopping containers...");
         handle_containers(&running_containers, "stop")?;
         backup_status = run(&config).unwrap_or_else(err_closure);
@@ -99,34 +98,29 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
         backup_status = run(&config).unwrap_or_else(err_closure);
     }
 
-    match config.gotify_url {
-        Some(url) => send_notification::<Gotify>(Gotify {
+    if let Some(gotify_url) = config.gotify_url {
+        send_notification::<Gotify>(Gotify {
             err_message: &err_message,
             success: backup_status,
-            url: &url,
-        })?,
-        None => (),
+            url: &gotify_url,
+        })?;
     }
 
-    match config.discord_url {
-        Some(url) => send_notification::<Discord>(Discord {
+    if let Some(dc_url) = config.discord_url {
+        send_notification::<Discord>(Discord {
             err_message: &err_message,
             success: backup_status,
-            url: &url,
-        })?,
-        None => (),
+            url: &dc_url,
+        })?;
     }
     Ok(())
 }
 
 fn run(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-    let backup_status = if config
-        .dest_path
-        .contains("@")
-    {
-        ssh_backup(&config)
+    let backup_status = if config.dest_path.contains('@') {
+        ssh_backup(config)
     } else {
-        local_rsync_backup(&config)
+        local_rsync_backup(config)
     }?;
 
     Ok(backup_status)
@@ -210,7 +204,7 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     )))
 }
 
-fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) -> () {
+fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) {
     for dir in dirs_to_exclude {
         command.arg(format!("--exclude={}", dir));
     }
