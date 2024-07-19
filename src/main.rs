@@ -1,4 +1,6 @@
+use backup::DockerBackup;
+
 mod backup;
 fn main() {
-    backup::Config::build().backup().expect("Backup failed");
+    DockerBackup::build().backup().expect("Backup failed");
 }
