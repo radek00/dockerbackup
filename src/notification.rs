@@ -21,12 +21,12 @@ impl<'a> Notification for Gotify<'a> {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", self.err_message);
         let mut map: HashMap<&str, String> = HashMap::new();
-        let message;
-        if self.success {
-            message = String::from("Backup successful");
+        let message = if self.success {
+            String::from("Backup successful")
         } else {
-            message = format!("Backup failed \n Error message: {}", self.err_message);
-        }
+            format!("Backup failed \n Error message: {}", self.err_message)
+        };
+
         map.insert("title", String::from("Backup result"));
         map.insert("message", message);
         let client = reqwest::blocking::Client::new();
