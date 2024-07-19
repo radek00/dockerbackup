@@ -3,6 +3,7 @@ use clap;
 use notification::send_notification;
 use notification::Discord;
 use notification::Gotify;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
@@ -119,7 +120,10 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-    let backup_status = if config.dest_path.contains("@") {
+    let backup_status = if config
+        .dest_path
+        .contains("@")
+    {
         ssh_backup(&config)
     } else {
         local_rsync_backup(&config)
@@ -145,7 +149,8 @@ fn check_running_containers() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-    if !create_new_dir(&config)? {
+    let dest_path = Path::new(&config.dest_path);
+    if !create_new_dir(dest_path, &config.new_dir)? {
         return Err(Box::from("Could not create directory"));
     }
 
@@ -156,7 +161,7 @@ fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error
     let exec_rsync = rsync
         .arg("-az")
         .arg(&config.volume_path)
-        .arg(format!("{}/{}", config.dest_path, config.new_dir))
+        .arg(dest_path.join(&config.new_dir))
         .status()?;
     if exec_rsync.success() {
         return Ok(true);
@@ -173,14 +178,21 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
 
     let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
-    let path: Vec<&str> = config.dest_path.split("/").collect();
+    let ssh_path_parts: Vec<&str> = config
+        .dest_path
+        .splitn(2, std::path::MAIN_SEPARATOR)
+        .collect();
 
-    let dest_path = append_to_path(path[1], &config.new_dir);
+    if ssh_path_parts.len() != 2 {
+        return Err(Box::from("Wrong path format"));
+    }
+
+    let dest_path = Path::new(ssh_path_parts[1]).join(&config.new_dir);
 
     let ssh = Command::new("ssh")
-        .arg(path[0])
+        .arg(ssh_path_parts[0])
         .arg("mkdir")
-        .arg(format!("{}\\{}", path[1], config.new_dir))
+        .arg(&dest_path)
         .arg("&&")
         .arg("tar")
         .arg("-C")
@@ -204,10 +216,10 @@ fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) -> () {
     }
 }
 
-fn create_new_dir(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
+fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<bool, Box<dyn std::error::Error>> {
     let new_dir = Command::new("mkdir")
         .arg("-p")
-        .arg(format!("{}/{}", config.dest_path, config.new_dir))
+        .arg(dest_path.join(new_dir))
         .status()?;
     Ok(new_dir.success())
 }
@@ -224,12 +236,4 @@ fn handle_containers(
         return Ok(());
     }
     Err(Box::from("Failed to handle containers"))
-}
-
-fn append_to_path(path: &str, new_dir: &String) -> String {
-    if path.contains("\\") {
-        format!("{}\\{}", path, new_dir)
-    } else {
-        format!("{}/{}", path, new_dir)
-    }
 }
