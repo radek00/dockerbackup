@@ -30,14 +30,15 @@ impl<'a> Notification for Gotify<'a> {
         map.insert("title", String::from("Backup result"));
         map.insert("message", message);
         let client = reqwest::blocking::Client::new();
-        
+
         for attempt in 0..10 {
             println!("Sending request to Gotify.Attempt {}", attempt);
-            let _req = client.post(self.url)
-                    .header("Accept", "application/json")
-                    .header("Content-Type", "application/json")
-                    .json(&map)
-                    .send();
+            let _req = client
+                .post(self.url)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json(&map)
+                .send();
             if let Ok(response) = _req {
                 if response.status().is_success() {
                     return Ok(());
@@ -45,8 +46,9 @@ impl<'a> Notification for Gotify<'a> {
             }
             thread::sleep(time::Duration::from_secs(10));
         }
-        Err(Box::from("Error sending request to gotify after 10 attempts"))
-     
+        Err(Box::from(
+            "Error sending request to gotify after 10 attempts",
+        ))
     }
 }
 
@@ -54,15 +56,26 @@ impl<'a> Notification for Discord<'a> {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", self.err_message);
 
-        let status_field = format!(r#"{{
+        let status_field = format!(
+            r#"{{
             "name": "Status",
             "value": "{}"
-        }}"#, if self.success { "Success" } else { "Failed" });
-        let error_message_field = format!(r#",{{
+        }}"#,
+            if self.success { "Success" } else { "Failed" }
+        );
+        let error_message_field = format!(
+            r#",{{
             "name": "Error Message",
             "value": "{}"
-        }}"#, if self.err_message.is_empty() { "No error message" } else { self.err_message });
-        let json = format!(r#"
+        }}"#,
+            if self.err_message.is_empty() {
+                "No error message"
+            } else {
+                self.err_message
+            }
+        );
+        let json = format!(
+            r#"
         {{
             "embeds": [
                 {{
@@ -74,20 +87,26 @@ impl<'a> Notification for Discord<'a> {
                 }}
             ]
         }}
-    "#, status_field, error_message_field);
+    "#,
+            status_field, error_message_field
+        );
         let client = reqwest::blocking::Client::new();
-        let _req = client.post(self.url)
-                .header("Accept", "application/json")
-                .header("Content-Type", "application/json")
-                .body(json)
-                .send();
+        let _req = client
+            .post(self.url)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .body(json)
+            .send();
         if _req?.status().is_success() {
             Ok(())
-        } else { Err(Box::from("Error sending notification to discord"))}
-     
+        } else {
+            Err(Box::from("Error sending notification to discord"))
+        }
     }
 }
 
-pub fn send_notification<T: Notification>(notification: T) -> Result<(), Box<dyn std::error::Error>> {
+pub fn send_notification<T: Notification>(
+    notification: T,
+) -> Result<(), Box<dyn std::error::Error>> {
     notification.send_notification()
 }

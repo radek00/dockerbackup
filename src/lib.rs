@@ -1,11 +1,11 @@
-use std::path::PathBuf;
-use std::process:: Stdio;
-use std::process::Command;
 use chrono::{self, Datelike};
 use clap;
 use notification::send_notification;
 use notification::Discord;
 use notification::Gotify;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
 
 mod notification;
 
@@ -54,17 +54,22 @@ impl Config {
                 .required(false)
                 .long("discord"))
             .get_matches();
-        
+
         let mut excluded_directories = match matches.remove_many::<String>("excluded_volumes") {
-            Some(dirs) => {
-                dirs.collect()
-            },
+            Some(dirs) => dirs.collect(),
             None => vec![],
         };
 
         excluded_directories.push(String::from("backingFsBlockDev"));
 
-        Ok(Config { dest_path: matches.remove_one::<String>("dest_path").unwrap(), new_dir, volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(), excluded_directories, gotify_url:  matches.remove_one::<String>("gotify_url"), discord_url: matches.remove_one::<String>("discord_url") }) 
+        Ok(Config {
+            dest_path: matches.remove_one::<String>("dest_path").unwrap(),
+            new_dir,
+            volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
+            excluded_directories,
+            gotify_url: matches.remove_one::<String>("gotify_url"),
+            discord_url: matches.remove_one::<String>("discord_url"),
+        })
     }
 }
 
@@ -76,7 +81,7 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
     let mut running_containers: Vec<&str> = containers.trim().split("\n").collect();
     running_containers.retain(|&x| !x.is_empty());
 
-    let err_closure = | err | {
+    let err_closure = |err| {
         err_message = format!("{}", err);
         false
     };
@@ -84,9 +89,9 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
     let backup_status;
 
     if running_containers.len() > 0 {
-        println!("Stopping containers..."); 
+        println!("Stopping containers...");
         handle_containers(&running_containers, "stop")?;
-        backup_status =  run(&config).unwrap_or_else(err_closure);
+        backup_status = run(&config).unwrap_or_else(err_closure);
         println!("Starting containers...");
         handle_containers(&running_containers, "start")?;
     } else {
@@ -94,20 +99,26 @@ pub fn backup() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match config.gotify_url {
-        Some(url) => send_notification::<Gotify>(Gotify {err_message: &err_message, success: backup_status, url: &url})?,
+        Some(url) => send_notification::<Gotify>(Gotify {
+            err_message: &err_message,
+            success: backup_status,
+            url: &url,
+        })?,
         None => (),
-        
     }
 
     match config.discord_url {
-        Some(url) => send_notification::<Discord>(Discord {err_message: &err_message, success: backup_status, url: &url})?,
+        Some(url) => send_notification::<Discord>(Discord {
+            err_message: &err_message,
+            success: backup_status,
+            url: &url,
+        })?,
         None => (),
     }
     Ok(())
 }
 
 fn run(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-
     let backup_status = if config.dest_path.contains("@") {
         ssh_backup(&config)
     } else {
@@ -117,30 +128,39 @@ fn run(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     Ok(backup_status)
 }
 
-
 fn check_docker() -> Result<(), Box<dyn std::error::Error>> {
     let status = Command::new("docker").arg("--version").status()?;
-    if status.success() { return Ok(()) }
+    if status.success() {
+        return Ok(());
+    }
     Err(Box::from("Can't continue without Docker installed"))
 }
 
 fn check_running_containers() -> Result<String, Box<dyn std::error::Error>> {
-    let running_containers = Command::new("docker").args(["container", "ls", "-q"]).output()?;
+    let running_containers = Command::new("docker")
+        .args(["container", "ls", "-q"])
+        .output()?;
     let containers_list = String::from_utf8(running_containers.stdout)?;
     Ok(containers_list)
 }
 
 fn local_rsync_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
     if !create_new_dir(&config)? {
-        return Err(Box::from("Could not create directory"))
-    } 
+        return Err(Box::from("Could not create directory"));
+    }
 
     let mut rsync = Command::new("rsync");
 
     exclude_dirs(&mut rsync, &config.excluded_directories);
 
-    let exec_rsync = rsync.arg("-az").arg(&config.volume_path).arg(format!("{}/{}", config.dest_path, config.new_dir)).status()?;
-    if exec_rsync.success() { return  Ok(true) }
+    let exec_rsync = rsync
+        .arg("-az")
+        .arg(&config.volume_path)
+        .arg(format!("{}/{}", config.dest_path, config.new_dir))
+        .status()?;
+    if exec_rsync.success() {
+        return Ok(true);
+    }
     Err(Box::from("Rsync backup failed"))
 }
 
@@ -157,13 +177,25 @@ fn ssh_backup(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
 
     let dest_path = append_to_path(path[1], &config.new_dir);
 
-    let ssh = Command::new("ssh").arg(path[0])
-    .arg("mkdir").arg(format!("{}\\{}", path[1], config.new_dir)).arg("&&")
-    .arg("tar").arg("-C").arg(dest_path).arg("-xf-")
-    .stdin(Stdio::from(tar_exec.stdout.unwrap())).output()?;
+    let ssh = Command::new("ssh")
+        .arg(path[0])
+        .arg("mkdir")
+        .arg(format!("{}\\{}", path[1], config.new_dir))
+        .arg("&&")
+        .arg("tar")
+        .arg("-C")
+        .arg(dest_path)
+        .arg("-xf-")
+        .stdin(Stdio::from(tar_exec.stdout.unwrap()))
+        .output()?;
 
-    if ssh.status.success() { return Ok(true) } 
-    Err(Box::from(format!("Ssh backup failed: {}", String::from_utf8_lossy(&ssh.stderr))))
+    if ssh.status.success() {
+        return Ok(true);
+    }
+    Err(Box::from(format!(
+        "Ssh backup failed: {}",
+        String::from_utf8_lossy(&ssh.stderr)
+    )))
 }
 
 fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) -> () {
@@ -173,13 +205,24 @@ fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) -> () {
 }
 
 fn create_new_dir(config: &Config) -> Result<bool, Box<dyn std::error::Error>> {
-    let new_dir = Command::new("mkdir").arg("-p").arg(format!("{}/{}", config.dest_path, config.new_dir)).status()?;
+    let new_dir = Command::new("mkdir")
+        .arg("-p")
+        .arg(format!("{}/{}", config.dest_path, config.new_dir))
+        .status()?;
     Ok(new_dir.success())
 }
 
-fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let cmd_result = Command::new("docker").arg(command).args(containers).status()?;
-    if cmd_result.success() { return Ok(()) }
+fn handle_containers(
+    containers: &Vec<&str>,
+    command: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cmd_result = Command::new("docker")
+        .arg(command)
+        .args(containers)
+        .status()?;
+    if cmd_result.success() {
+        return Ok(());
+    }
     Err(Box::from("Failed to handle containers"))
 }
 
