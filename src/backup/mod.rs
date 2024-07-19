@@ -1,13 +1,13 @@
 use chrono::{self, Datelike};
-use notification::send_notification;
-use notification::Discord;
-use notification::Gotify;
-use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
-use std::process::Stdio;
+use notification::{send_notification, Discord, Gotify};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use utils::{
+    check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
+};
 
 mod notification;
+mod utils;
 
 pub struct DockerBackup {
     pub dest_path: String,
@@ -181,48 +181,4 @@ impl DockerBackup {
             String::from_utf8_lossy(&ssh.stderr)
         )))
     }
-}
-
-fn check_docker() -> Result<(), Box<dyn std::error::Error>> {
-    let status = Command::new("docker").arg("--version").status()?;
-    if status.success() {
-        return Ok(());
-    }
-    Err(Box::from("Can't continue without Docker installed"))
-}
-
-fn check_running_containers() -> Result<String, Box<dyn std::error::Error>> {
-    let running_containers = Command::new("docker")
-        .args(["container", "ls", "-q"])
-        .output()?;
-    let containers_list = String::from_utf8(running_containers.stdout)?;
-    Ok(containers_list)
-}
-
-fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) {
-    for dir in dirs_to_exclude {
-        command.arg(format!("--exclude={}", dir));
-    }
-}
-
-fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<bool, Box<dyn std::error::Error>> {
-    let new_dir = Command::new("mkdir")
-        .arg("-p")
-        .arg(dest_path.join(new_dir))
-        .status()?;
-    Ok(new_dir.success())
-}
-
-fn handle_containers(
-    containers: &Vec<&str>,
-    command: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let cmd_result = Command::new("docker")
-        .arg(command)
-        .args(containers)
-        .status()?;
-    if cmd_result.success() {
-        return Ok(());
-    }
-    Err(Box::from("Failed to handle containers"))
 }
