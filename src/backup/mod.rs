@@ -1,4 +1,5 @@
 use chrono::{self, Datelike};
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use notification::{send_notification, Discord, Gotify};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,6 +28,10 @@ impl DockerBackup {
             .version("0.1.0")
             .author("radek00")
             .about("Simple docker backup tool to perform backups to local destination or remote ssh server")
+            .styles(Styles::styled()
+            .header(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
+            .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
+            .placeholder(AnsiColor::Yellow.on_default()))
             .arg(clap::Arg::new("dest_path")
                 .help("Backup destination path. Accepts local or remote ssh path. Example: /backup or user@host:/backup")
                 .required(true)
