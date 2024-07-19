@@ -9,7 +9,7 @@ use std::process::Stdio;
 
 mod notification;
 
-pub struct Config {
+pub struct DockerBackup {
     pub dest_path: String,
     pub new_dir: String,
     pub volume_path: PathBuf,
@@ -18,8 +18,8 @@ pub struct Config {
     pub discord_url: Option<String>,
 }
 
-impl Config {
-    pub fn build() -> Config {
+impl DockerBackup {
+    pub fn build() -> DockerBackup {
         let date = chrono::Local::now();
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
 
@@ -62,7 +62,7 @@ impl Config {
 
         excluded_directories.push(String::from("backingFsBlockDev"));
 
-        Config {
+        DockerBackup {
             dest_path: matches.remove_one::<String>("dest_path").unwrap(),
             new_dir,
             volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
