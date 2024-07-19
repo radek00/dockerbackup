@@ -1,4 +1,4 @@
 mod backup;
 fn main() {
-    backup::backup().expect("Backup failed");
+    backup::Config::build().backup().expect("Backup failed");
 }
