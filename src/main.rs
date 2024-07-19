@@ -1,3 +1,4 @@
+mod backup;
 fn main() {
-    dockerbackup::backup().expect("Backup failed");
+    backup::backup().expect("Backup failed");
 }
