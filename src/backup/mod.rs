@@ -168,7 +168,9 @@ impl DockerBackup {
             return Err(BackupError::new("Invalid ssh path"));
         }
 
-        let dest_path = Path::new(ssh_path_parts[1]).join(&self.new_dir);
+        println!("{:?}", ssh_path_parts);
+
+        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir);
 
         let ssh = Command::new("ssh")
             .arg(ssh_path_parts[0])
@@ -189,5 +191,13 @@ impl DockerBackup {
             "Ssh backup failed: {}",
             String::from_utf8_lossy(&ssh.stderr)
         )))
+    }
+}
+
+fn append_to_path(path: &str, new_dir: &String) -> String {
+    if path.contains("\\") {
+        format!("{}\\{}", path, new_dir)
+    } else {
+        format!("{}/{}", path, new_dir)
     }
 }
