@@ -42,3 +42,20 @@ pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Ba
     }
     Err(BackupError::new("Error handling containers"))
 }
+
+pub fn validate_destination_path(val: &str) -> Result<String, String> {
+    if val.contains('@') {
+        let parts: Vec<&str> = val.splitn(2, ':').collect();
+        if parts.len() == 2 && parts[0].contains('@') {
+            Ok(val.to_owned())
+        } else {
+            Err(String::from(
+                "SSH path must be in the format user@host:path",
+            ))
+        }
+    } else if Path::new(val).exists() {
+        Ok(val.to_owned())
+    } else {
+        Err(String::from("Local path does not exist"))
+    }
+}
