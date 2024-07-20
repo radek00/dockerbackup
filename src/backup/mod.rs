@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
+    validate_destination_path,
 };
 
 mod backup_error;
@@ -37,8 +38,9 @@ impl DockerBackup {
             .arg(clap::Arg::new("dest_path")
                 .help("Backup destination path. Accepts local or remote ssh path. Example: /backup or user@host:/backup")
                 .required(true)
+                .value_parser(validate_destination_path)
                 .short('d')
-                .long("destination"))
+            .long("destination"))
             .arg(clap::Arg::new("volume_path")
                 .help("Path to docker volumes directory")
                 .value_parser(clap::value_parser!(PathBuf))
@@ -160,10 +162,7 @@ impl DockerBackup {
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
-        let ssh_path_parts: Vec<&str> = self
-            .dest_path
-            .splitn(2, std::path::MAIN_SEPARATOR)
-            .collect();
+        let ssh_path_parts: Vec<&str> = self.dest_path.splitn(2, ':').collect();
 
         if ssh_path_parts.len() != 2 {
             return Err(BackupError::new("Invalid ssh path"));
