@@ -1,14 +1,16 @@
 use std::{path::Path, process::Command};
 
-pub fn check_docker() -> Result<(), Box<dyn std::error::Error>> {
+use super::backup_error::BackupError;
+
+pub fn check_docker() -> Result<(), BackupError> {
     let status = Command::new("docker").arg("--version").status()?;
     if status.success() {
         return Ok(());
     }
-    Err(Box::from("Can't continue without Docker installed"))
+    Err(BackupError::new("Can't continue without Docker installed"))
 }
 
-pub fn check_running_containers() -> Result<String, Box<dyn std::error::Error>> {
+pub fn check_running_containers() -> Result<String, BackupError> {
     let running_containers = Command::new("docker")
         .args(["container", "ls", "-q"])
         .output()?;
@@ -22,10 +24,7 @@ pub fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) {
     }
 }
 
-pub fn create_new_dir(
-    dest_path: &Path,
-    new_dir: &String,
-) -> Result<bool, Box<dyn std::error::Error>> {
+pub fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<bool, BackupError> {
     let new_dir = Command::new("mkdir")
         .arg("-p")
         .arg(dest_path.join(new_dir))
@@ -33,10 +32,7 @@ pub fn create_new_dir(
     Ok(new_dir.success())
 }
 
-pub fn handle_containers(
-    containers: &Vec<&str>,
-    command: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), BackupError> {
     let cmd_result = Command::new("docker")
         .arg(command)
         .args(containers)
@@ -44,5 +40,5 @@ pub fn handle_containers(
     if cmd_result.success() {
         return Ok(());
     }
-    Err(Box::from("Failed to handle containers"))
+    Err(BackupError::new("Error handling containers"))
 }

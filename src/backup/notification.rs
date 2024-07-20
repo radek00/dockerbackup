@@ -6,25 +6,35 @@ pub trait Notification {
 }
 
 pub struct Gotify<'a> {
-    pub err_message: &'a String,
+    pub message: Option<String>,
     pub url: &'a String,
     pub success: bool,
 }
 
 pub struct Discord<'a> {
-    pub err_message: &'a String,
+    pub message: Option<String>,
     pub url: &'a String,
     pub success: bool,
 }
 
 impl<'a> Notification for Gotify<'a> {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("{}", self.err_message);
         let mut map: HashMap<&str, String> = HashMap::new();
-        let message = if self.success {
-            String::from("Backup successful")
+
+        let message = if let Some(msg) = &self.message {
+            format!(
+                "{}\n{}",
+                if self.success {
+                    "Backup successful"
+                } else {
+                    "Backup failed"
+                },
+                msg
+            )
+        } else if self.success {
+            "Backup successful".to_string()
         } else {
-            format!("Backup failed \n Error message: {}", self.err_message)
+            "Backup failed".to_string()
         };
 
         map.insert("title", String::from("Backup result"));
@@ -54,8 +64,6 @@ impl<'a> Notification for Gotify<'a> {
 
 impl<'a> Notification for Discord<'a> {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("{}", self.err_message);
-
         let status_field = format!(
             r#"{{
             "name": "Status",
@@ -65,13 +73,13 @@ impl<'a> Notification for Discord<'a> {
         );
         let error_message_field = format!(
             r#",{{
-            "name": "Error Message",
+            "name": "Message",
             "value": "{}"
         }}"#,
-            if self.err_message.is_empty() {
-                "No error message"
+            if let Some(msg) = &self.message {
+                msg
             } else {
-                self.err_message
+                "No message"
             }
         );
         let json = format!(

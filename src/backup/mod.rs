@@ -1,3 +1,4 @@
+use backup_error::BackupError;
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use notification::{send_notification, Discord, Gotify};
@@ -7,6 +8,7 @@ use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
 };
 
+mod backup_error;
 mod notification;
 mod utils;
 
@@ -76,48 +78,51 @@ impl DockerBackup {
             discord_url: matches.remove_one::<String>("discord_url"),
         }
     }
-    pub fn backup(&self) -> Result<(), Box<dyn std::error::Error>> {
-        check_docker()?;
-        let mut err_message = String::from("");
-        let containers = check_running_containers()?;
-        let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
-        running_containers.retain(|&x| !x.is_empty());
-
-        let err_closure = |err| {
-            err_message = format!("{}", err);
-            false
-        };
-
-        let backup_status;
-
-        if !running_containers.is_empty() {
-            println!("Stopping containers...");
-            handle_containers(&running_containers, "stop")?;
-            backup_status = self.run().unwrap_or_else(err_closure);
-            println!("Starting containers...");
-            handle_containers(&running_containers, "start")?;
-        } else {
-            backup_status = self.run().unwrap_or_else(err_closure);
-        }
-
+    fn notify(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(gotify_url) = &self.gotify_url {
             send_notification::<Gotify>(Gotify {
-                err_message: &err_message,
-                success: backup_status,
+                message: None,
+                success: true,
                 url: gotify_url,
             })?;
         }
 
         if let Some(dc_url) = &self.discord_url {
             send_notification::<Discord>(Discord {
-                err_message: &err_message,
-                success: backup_status,
+                message: None,
+                success: true,
                 url: dc_url,
             })?;
         }
         Ok(())
     }
-    fn run(&self) -> Result<bool, Box<dyn std::error::Error>> {
+    fn backup(&self) -> Result<(), BackupError> {
+        check_docker()?;
+        let containers = check_running_containers()?;
+        let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
+        running_containers.retain(|&x| !x.is_empty());
+
+        if !running_containers.is_empty() {
+            println!("Stopping containers...");
+            handle_containers(&running_containers, "stop")?;
+            self.run()?;
+            println!("Starting containers...");
+            handle_containers(&running_containers, "start")?;
+        } else {
+            self.run()?;
+        }
+        self.notify().unwrap_or_else(|err| {
+            println!("Notification error: {}", err);
+        });
+        Ok(())
+    }
+    pub fn backup_volumes(self) -> Self {
+        self.backup().unwrap_or_else(|err| {
+            err.notify(&self);
+        });
+        self
+    }
+    fn run(&self) -> Result<bool, BackupError> {
         let backup_status = if self.dest_path.contains('@') {
             self.ssh_backup()
         } else {
@@ -126,10 +131,10 @@ impl DockerBackup {
 
         Ok(backup_status)
     }
-    fn local_rsync_backup(&self) -> Result<bool, Box<dyn std::error::Error>> {
+    fn local_rsync_backup(&self) -> Result<bool, BackupError> {
         let dest_path = Path::new(&self.dest_path);
         if !create_new_dir(dest_path, &self.new_dir)? {
-            return Err(Box::from("Could not create directory"));
+            return Err(BackupError::new("Error creating new directory"));
         }
 
         let mut rsync = Command::new("rsync");
@@ -144,9 +149,9 @@ impl DockerBackup {
         if exec_rsync.success() {
             return Ok(true);
         }
-        Err(Box::from("Rsync backup failed"))
+        Err(BackupError::new("Rsync backup failed"))
     }
-    fn ssh_backup(&self) -> Result<bool, Box<dyn std::error::Error>> {
+    fn ssh_backup(&self) -> Result<bool, BackupError> {
         let mut tar_volumes = Command::new("tar");
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
@@ -161,7 +166,7 @@ impl DockerBackup {
             .collect();
 
         if ssh_path_parts.len() != 2 {
-            return Err(Box::from("Wrong path format"));
+            return Err(BackupError::new("Invalid ssh path"));
         }
 
         let dest_path = Path::new(ssh_path_parts[1]).join(&self.new_dir);
@@ -181,7 +186,7 @@ impl DockerBackup {
         if ssh.status.success() {
             return Ok(true);
         }
-        Err(Box::from(format!(
+        Err(BackupError::new(&format!(
             "Ssh backup failed: {}",
             String::from_utf8_lossy(&ssh.stderr)
         )))
