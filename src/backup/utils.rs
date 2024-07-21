@@ -1,6 +1,6 @@
 use std::{path::Path, process::Command};
 
-use super::backup_error::BackupError;
+use super::{backup_error::BackupError, TargetOs};
 
 pub fn check_docker() -> Result<(), BackupError> {
     let status = Command::new("docker").arg("--version").status()?;
@@ -43,18 +43,24 @@ pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Ba
     Err(BackupError::new("Error handling containers"))
 }
 
-pub fn validate_destination_path(val: &str) -> Result<String, String> {
-    if val.contains('@') {
-        let parts: Vec<&str> = val.splitn(2, ':').collect();
+pub fn validate_destination_path(val: &str) -> Result<(String, TargetOs), String> {
+    let tuple: Vec<&str> = val.splitn(2, ',').collect();
+    if tuple.len() != 2 {
+        return Err(String::from(
+            "Destination path and target os must be provided",
+        ));
+    }
+    if tuple[0].contains('@') {
+        let parts: Vec<&str> = tuple[0].splitn(2, ':').collect();
         if parts.len() == 2 && parts[0].contains('@') {
-            Ok(val.to_owned())
+            Ok((tuple[0].to_owned(), TargetOs::from_str(tuple[1])?))
         } else {
             Err(String::from(
                 "SSH path must be in the format user@host:path",
             ))
         }
     } else if Path::new(val).exists() {
-        Ok(val.to_owned())
+        Ok((val.to_owned(), TargetOs::Windows))
     } else {
         Err(String::from("Local path does not exist"))
     }
