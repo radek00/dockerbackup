@@ -32,12 +32,12 @@ impl TargetOs {
 }
 
 pub struct DockerBackup {
-    pub dest_path: (String, TargetOs),
-    pub new_dir: String,
-    pub volume_path: PathBuf,
-    pub excluded_directories: Vec<String>,
-    pub gotify_url: Option<String>,
-    pub discord_url: Option<String>,
+    dest_path: (String, TargetOs),
+    new_dir: String,
+    volume_path: PathBuf,
+    excluded_directories: Vec<String>,
+    gotify_url: Option<String>,
+    discord_url: Option<String>,
 }
 
 impl DockerBackup {
