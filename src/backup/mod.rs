@@ -13,8 +13,26 @@ mod backup_error;
 mod notification;
 mod utils;
 
+#[derive(Clone, PartialEq, Eq)]
+pub enum TargetOs {
+    Unix,
+    Windows,
+}
+
+impl TargetOs {
+    fn from_str(os: &str) -> Result<Self, String> {
+        let os = os.to_lowercase();
+        if os == "windows" {
+            return Ok(TargetOs::Windows);
+        } else if os == "unix" {
+            return Ok(TargetOs::Unix);
+        }
+        Err(String::from("Unsupported os"))
+    }
+}
+
 pub struct DockerBackup {
-    pub dest_path: String,
+    pub dest_path: (String, TargetOs),
     pub new_dir: String,
     pub volume_path: PathBuf,
     pub excluded_directories: Vec<String>,
@@ -36,7 +54,7 @@ impl DockerBackup {
             .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
             .placeholder(AnsiColor::Yellow.on_default()))
             .arg(clap::Arg::new("dest_path")
-                .help("Backup destination path. Accepts local or remote ssh path. Example: /backup or user@host:/backup")
+                .help("Backup destination path. Accepts local or remote ssh path. Target os must be provided with ssh paths. [/backup or user@host:/backup, windows]")
                 .required(true)
                 .value_parser(validate_destination_path)
                 .short('d')
@@ -72,7 +90,9 @@ impl DockerBackup {
         excluded_directories.push(String::from("backingFsBlockDev"));
 
         DockerBackup {
-            dest_path: matches.remove_one::<String>("dest_path").unwrap(),
+            dest_path: matches
+                .remove_one::<(String, TargetOs)>("dest_path")
+                .unwrap(),
             new_dir,
             volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
             excluded_directories,
@@ -125,7 +145,7 @@ impl DockerBackup {
         self
     }
     fn run(&self) -> Result<bool, BackupError> {
-        let backup_status = if self.dest_path.contains('@') {
+        let backup_status = if self.dest_path.0.contains('@') {
             self.ssh_backup()
         } else {
             self.local_rsync_backup()
@@ -134,7 +154,7 @@ impl DockerBackup {
         Ok(backup_status)
     }
     fn local_rsync_backup(&self) -> Result<bool, BackupError> {
-        let dest_path = Path::new(&self.dest_path);
+        let dest_path = Path::new(&self.dest_path.0);
         if !create_new_dir(dest_path, &self.new_dir)? {
             return Err(BackupError::new("Error creating new directory"));
         }
@@ -162,15 +182,13 @@ impl DockerBackup {
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
-        let ssh_path_parts: Vec<&str> = self.dest_path.splitn(2, ':').collect();
+        let ssh_path_parts: Vec<&str> = self.dest_path.0.splitn(2, ':').collect();
 
         if ssh_path_parts.len() != 2 {
             return Err(BackupError::new("Invalid ssh path"));
         }
 
-        println!("{:?}", ssh_path_parts);
-
-        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir);
+        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &self.dest_path.1);
 
         let ssh = Command::new("ssh")
             .arg(ssh_path_parts[0])
@@ -194,8 +212,8 @@ impl DockerBackup {
     }
 }
 
-fn append_to_path(path: &str, new_dir: &String) -> String {
-    if path.contains("\\") {
+fn append_to_path(path: &str, new_dir: &String, target_os: &TargetOs) -> String {
+    if target_os == &TargetOs::Windows {
         format!("{}\\{}", path, new_dir)
     } else {
         format!("{}/{}", path, new_dir)
