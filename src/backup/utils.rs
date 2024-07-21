@@ -44,13 +44,14 @@ pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Ba
 }
 
 pub fn validate_destination_path(val: &str) -> Result<(String, TargetOs), String> {
-    let tuple: Vec<&str> = val.splitn(2, ',').collect();
-    if tuple.len() != 2 {
-        return Err(String::from(
-            "Destination path and target os must be provided",
-        ));
-    }
-    if tuple[0].contains('@') {
+    if val.contains('@') {
+        let tuple: Vec<&str> = val.splitn(2, ',').collect();
+        if tuple.len() != 2 {
+            return Err(String::from(
+                "Destination path and target os must be provided",
+            ));
+        }
+
         let parts: Vec<&str> = tuple[0].splitn(2, ':').collect();
         if parts.len() == 2 && parts[0].contains('@') {
             Ok((tuple[0].to_owned(), TargetOs::from_str(tuple[1])?))
