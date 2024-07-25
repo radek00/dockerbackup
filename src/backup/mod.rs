@@ -2,8 +2,13 @@ use backup_error::BackupError;
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use notification::{send_notification, Discord, Gotify};
+use std::os::unix::process;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{exit, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc};
+use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
     validate_destination_path,
@@ -124,6 +129,7 @@ impl DockerBackup {
         let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
         running_containers.retain(|&x| !x.is_empty());
 
+        println!("Backup started...");
         if !running_containers.is_empty() {
             println!("Stopping containers...");
             handle_containers(&running_containers, "stop")?;
@@ -136,6 +142,7 @@ impl DockerBackup {
         self.notify().unwrap_or_else(|err| {
             println!("Notification error: {}", err);
         });
+
         Ok(())
     }
     pub fn backup_volumes(self) -> Self {
@@ -145,8 +152,24 @@ impl DockerBackup {
         self
     }
     fn run(&self) -> Result<bool, BackupError> {
+        let (sender, receiver): (mpsc::Sender<()>, mpsc::Receiver<()>) = mpsc::channel();
+        let mut call_count = 0;
+        ctrlc::set_handler(move || {
+            call_count += 1;
+            // Signal handler: This block is executed when a ctrl+c signal is received
+            println!("Backup interrputed, trying to finish... Press Ctrl+C again to force exit");
+            sender
+                .send(())
+                .expect("Could not send signal through channel");
+            if call_count > 1 {
+                println!("Forcing exit...");
+                exit(1);
+            }
+            //r.store(false, Ordering::SeqCst);
+        })
+        .expect("Error setting Ctrl-C handler");
         let backup_status = if self.dest_path.0.contains('@') {
-            self.ssh_backup()
+            self.ssh_backup(&receiver)
         } else {
             self.local_rsync_backup()
         }?;
@@ -173,7 +196,7 @@ impl DockerBackup {
         }
         Err(BackupError::new("Rsync backup failed"))
     }
-    fn ssh_backup(&self) -> Result<bool, BackupError> {
+    fn ssh_backup(&self, receiver: &Receiver<()>) -> Result<bool, BackupError> {
         let mut tar_volumes = Command::new("tar");
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
@@ -190,7 +213,7 @@ impl DockerBackup {
 
         let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &self.dest_path.1);
 
-        let ssh = Command::new("ssh")
+        let mut ssh = Command::new("ssh")
             .arg(ssh_path_parts[0])
             .arg("mkdir")
             .arg(&dest_path)
@@ -200,15 +223,26 @@ impl DockerBackup {
             .arg(dest_path)
             .arg("-xf-")
             .stdin(Stdio::from(tar_exec.stdout.unwrap()))
-            .output()?;
+            .spawn()?;
 
-        if ssh.status.success() {
-            return Ok(true);
+        loop {
+            if let Ok(exist_status) = ssh.try_wait() {
+                if exist_status.unwrap().success() {
+                    return Ok(true);
+                }
+                return Err(BackupError::new(&format!("Ssh backup failed",)));
+            } else {
+                if receiver.try_recv().is_ok() {
+                    ssh.kill().expect("Failed to kill ssh process");
+                    return Err(BackupError::new("Backup interrupted"));
+                }
+            }
         }
-        Err(BackupError::new(&format!(
-            "Ssh backup failed: {}",
-            String::from_utf8_lossy(&ssh.stderr)
-        )))
+
+        //use try wait instead of wait
+        //if stil waitng try to receive message from channel
+        //if message received, start containers and kill command
+        //if no message received, continue waiting
     }
 }
 
@@ -219,3 +253,5 @@ fn append_to_path(path: &str, new_dir: &String, target_os: &TargetOs) -> String 
         format!("{}/{}", path, new_dir)
     }
 }
+
+fn ctrl_c_handler(running: &Arc<AtomicBool>) {}
