@@ -227,14 +227,19 @@ impl DockerBackup {
 
         loop {
             if let Ok(exist_status) = ssh.try_wait() {
-                if exist_status.unwrap().success() {
-                    return Ok(true);
-                }
-                return Err(BackupError::new(&format!("Ssh backup failed",)));
-            } else {
-                if receiver.try_recv().is_ok() {
-                    ssh.kill().expect("Failed to kill ssh process");
-                    return Err(BackupError::new("Backup interrupted"));
+                if let Some(status) = exist_status {
+                    println!("Status {:?}", status);
+                    if status.success() {
+                        return Ok(true);
+                    } else {
+                        println!("else");
+                        if receiver.try_recv().is_ok() {
+                            println!("Received message");
+                            ssh.kill().expect("Failed to kill ssh process");
+                            return Err(BackupError::new("Backup interrupted"));
+                        }
+                    }
+                    //return Err(BackupError::new(&format!("Ssh backup failed",)));
                 }
             }
         }
