@@ -180,15 +180,12 @@ impl DockerBackup {
                     println!("Status {:?}", status);
                     if status.success() {
                         return Ok(true);
-                    } else {
-                        println!("else");
-                        if receiver.try_recv().is_ok() {
-                            println!("Received message");
-                            backup_handle.kill().expect("Failed to kill ssh process");
-                            return Err(BackupError::new("Backup interrupted"));
-                        }
                     }
-                    //return Err(BackupError::new(&format!("Ssh backup failed",)));
+                    return Err(BackupError::new(&format!("Ssh backup failed",)));
+                } else if receiver.try_recv().is_ok() {
+                    println!("Received message");
+                    backup_handle.kill().expect("Failed to kill ssh process");
+                    return Err(BackupError::new("Backup interrupted"));
                 }
             }
         }
