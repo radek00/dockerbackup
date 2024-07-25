@@ -4,7 +4,7 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use notification::{send_notification, Discord, Gotify};
 use std::os::unix::process;
 use std::path::{Path, PathBuf};
-use std::process::{exit, Command, Stdio};
+use std::process::{exit, Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc};
@@ -168,15 +168,32 @@ impl DockerBackup {
             //r.store(false, Ordering::SeqCst);
         })
         .expect("Error setting Ctrl-C handler");
-        let backup_status = if self.dest_path.0.contains('@') {
-            self.ssh_backup(&receiver)
+        let mut backup_handle = if self.dest_path.0.contains('@') {
+            self.ssh_backup()
         } else {
             self.local_rsync_backup()
         }?;
 
-        Ok(backup_status)
+        loop {
+            if let Ok(exist_status) = backup_handle.try_wait() {
+                if let Some(status) = exist_status {
+                    println!("Status {:?}", status);
+                    if status.success() {
+                        return Ok(true);
+                    } else {
+                        println!("else");
+                        if receiver.try_recv().is_ok() {
+                            println!("Received message");
+                            backup_handle.kill().expect("Failed to kill ssh process");
+                            return Err(BackupError::new("Backup interrupted"));
+                        }
+                    }
+                    //return Err(BackupError::new(&format!("Ssh backup failed",)));
+                }
+            }
+        }
     }
-    fn local_rsync_backup(&self) -> Result<bool, BackupError> {
+    fn local_rsync_backup(&self) -> Result<Child, BackupError> {
         let dest_path = Path::new(&self.dest_path.0);
         if !create_new_dir(dest_path, &self.new_dir)? {
             return Err(BackupError::new("Error creating new directory"));
@@ -190,13 +207,12 @@ impl DockerBackup {
             .arg("-az")
             .arg(&self.volume_path)
             .arg(dest_path.join(&self.new_dir))
-            .status()?;
-        if exec_rsync.success() {
-            return Ok(true);
-        }
-        Err(BackupError::new("Rsync backup failed"))
+            .spawn()?;
+
+        Ok(exec_rsync)
+
     }
-    fn ssh_backup(&self, receiver: &Receiver<()>) -> Result<bool, BackupError> {
+    fn ssh_backup(&self) -> Result<Child, BackupError> {
         let mut tar_volumes = Command::new("tar");
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
@@ -213,7 +229,7 @@ impl DockerBackup {
 
         let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &self.dest_path.1);
 
-        let mut ssh = Command::new("ssh")
+        let ssh = Command::new("ssh")
             .arg(ssh_path_parts[0])
             .arg("mkdir")
             .arg(&dest_path)
@@ -225,24 +241,7 @@ impl DockerBackup {
             .stdin(Stdio::from(tar_exec.stdout.unwrap()))
             .spawn()?;
 
-        loop {
-            if let Ok(exist_status) = ssh.try_wait() {
-                if let Some(status) = exist_status {
-                    println!("Status {:?}", status);
-                    if status.success() {
-                        return Ok(true);
-                    } else {
-                        println!("else");
-                        if receiver.try_recv().is_ok() {
-                            println!("Received message");
-                            ssh.kill().expect("Failed to kill ssh process");
-                            return Err(BackupError::new("Backup interrupted"));
-                        }
-                    }
-                    //return Err(BackupError::new(&format!("Ssh backup failed",)));
-                }
-            }
-        }
+        return Ok(ssh);
 
         //use try wait instead of wait
         //if stil waitng try to receive message from channel
