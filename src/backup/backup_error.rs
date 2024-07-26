@@ -19,7 +19,6 @@ impl BackupError {
         }
     }
     pub fn notify(&self, config: &DockerBackup) {
-        println!("{}", self.message);
         if let Some(gotify_url) = &config.gotify_url {
             send_notification::<Gotify>(Gotify {
                 message: Some(format!("Error message: {}", self.message)),

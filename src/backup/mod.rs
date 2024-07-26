@@ -2,6 +2,7 @@ use backup_error::BackupError;
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use notification::{send_notification, Discord, Gotify};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -195,14 +196,33 @@ impl DockerBackup {
             self.local_rsync_backup()
         }?;
 
+        let stderr = backup_handle.stderr.take();
+        let mut stderr_reader = stderr.map(BufReader::new);
+        let mut buffer = Vec::new();
+
         loop {
             if let Ok(exist_status) = backup_handle.try_wait() {
                 if let Some(status) = exist_status {
-                    println!("Status {:?}", status);
                     if status.success() {
                         return Ok(true);
                     }
-                    return Err(BackupError::new(&format!("{} backup failed", error_type)));
+                    if let Some(reader) = stderr_reader.as_mut() {
+                        match reader.read_to_end(&mut buffer) {
+                            Ok(_) => {
+                                let stderr_output = String::from_utf8_lossy(&buffer);
+                                return Err(BackupError::new(&stderr_output));
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to read stderr: {}", e);
+                                return Err(BackupError::new(&format!(
+                                    "{} backup error",
+                                    error_type
+                                )));
+                            }
+                        }
+                    } else {
+                        return Err(BackupError::new(&format!("{} backup error", error_type)));
+                    }
                 } else if self.receiver.as_ref().unwrap().try_recv().is_ok() {
                     println!("Received message");
                     backup_handle.kill().expect("Failed to kill backup process");
@@ -228,6 +248,7 @@ impl DockerBackup {
             .arg("-az")
             .arg(&self.volume_path)
             .arg(dest_path.join(&self.new_dir))
+            .stderr(Stdio::piped())
             .spawn()?;
 
         Ok(exec_rsync)
@@ -259,6 +280,7 @@ impl DockerBackup {
             .arg(dest_path)
             .arg("-xf-")
             .stdin(Stdio::from(tar_exec.stdout.unwrap()))
+            .stderr(Stdio::piped())
             .spawn()?;
 
         Ok(ssh)
