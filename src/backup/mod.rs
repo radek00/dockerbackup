@@ -2,12 +2,10 @@ use backup_error::BackupError;
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use notification::{send_notification, Discord, Gotify};
-use std::os::unix::process;
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
-use std::sync::{mpsc, Arc};
 use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
@@ -43,6 +41,7 @@ pub struct DockerBackup {
     excluded_directories: Vec<String>,
     gotify_url: Option<String>,
     discord_url: Option<String>,
+    receiver: Option<Receiver<()>>,
 }
 
 impl DockerBackup {
@@ -103,6 +102,7 @@ impl DockerBackup {
             excluded_directories,
             gotify_url: matches.remove_one::<String>("gotify_url"),
             discord_url: matches.remove_one::<String>("discord_url"),
+            receiver: None,
         }
     }
     fn notify(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -139,35 +139,43 @@ impl DockerBackup {
         } else {
             self.run(None)?;
         }
-        self.notify().unwrap_or_else(|err| {
-            println!("Notification error: {}", err);
-        });
 
         Ok(())
     }
-    pub fn backup_volumes(self) -> Self {
+    pub fn backup_volumes(mut self) -> Self {
+        let (sender, receiver): (mpsc::Sender<()>, mpsc::Receiver<()>) = mpsc::channel();
+        let mut call_count = 0;
+        ctrlc::set_handler(move || {
+            if self.receiver.is_some() {
+                if call_count == 0 {
+                    println!("Backup interrputed, starting containers... Press Ctrl+C again to force exit");
+                    sender
+                        .send(())
+                        .expect("Could not send signal through channel");
+                    call_count += 1;
+                } else {
+                    println!("Forcing exit...");
+                    exit(1);
+                }
+            } else {
+                println!("Exiting...");
+                exit(1);
+            }
+        })
+        .expect("Error setting Ctrl-C handler");
+
+        self.receiver = Some(receiver);
+
         self.backup().unwrap_or_else(|err| {
             err.notify(&self);
+        });
+        self.receiver = None;
+        self.notify().unwrap_or_else(|err| {
+            println!("Notification error: {}", err);
         });
         self
     }
     fn run(&self, running_containers: Option<&Vec<&str>>) -> Result<bool, BackupError> {
-        let (sender, receiver): (mpsc::Sender<()>, mpsc::Receiver<()>) = mpsc::channel();
-        let mut call_count = 0;
-        ctrlc::set_handler(move || {
-            call_count += 1;
-            // Signal handler: This block is executed when a ctrl+c signal is received
-            println!("Backup interrputed, starting containers... Press Ctrl+C again to force exit");
-            sender
-                .send(())
-                .expect("Could not send signal through channel");
-            if call_count > 1 {
-                println!("Forcing exit...");
-                exit(1);
-            }
-            //r.store(false, Ordering::SeqCst);
-        })
-        .expect("Error setting Ctrl-C handler");
         let error_type;
         let mut backup_handle = if self.dest_path.0.contains('@') {
             error_type = "Ssh";
@@ -185,7 +193,7 @@ impl DockerBackup {
                         return Ok(true);
                     }
                     return Err(BackupError::new(&format!("{} backup failed", error_type)));
-                } else if receiver.try_recv().is_ok() {
+                } else if self.receiver.as_ref().unwrap().try_recv().is_ok() {
                     println!("Received message");
                     backup_handle.kill().expect("Failed to kill backup process");
                     if let Some(containers) = running_containers {
@@ -213,7 +221,6 @@ impl DockerBackup {
             .spawn()?;
 
         Ok(exec_rsync)
-
     }
     fn ssh_backup(&self) -> Result<Child, BackupError> {
         let mut tar_volumes = Command::new("tar");
@@ -245,11 +252,6 @@ impl DockerBackup {
             .spawn()?;
 
         return Ok(ssh);
-
-        //use try wait instead of wait
-        //if stil waitng try to receive message from channel
-        //if message received, start containers and kill command
-        //if no message received, continue waiting
     }
 }
 
@@ -260,5 +262,3 @@ fn append_to_path(path: &str, new_dir: &String, target_os: &TargetOs) -> String 
         format!("{}/{}", path, new_dir)
     }
 }
-
-fn ctrl_c_handler(running: &Arc<AtomicBool>) {}
