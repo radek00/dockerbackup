@@ -4,8 +4,9 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use notification::{send_notification, Discord, Gotify};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
@@ -145,8 +146,11 @@ impl DockerBackup {
     pub fn backup_volumes(mut self) -> Self {
         let (sender, receiver): (mpsc::Sender<()>, mpsc::Receiver<()>) = mpsc::channel();
         let mut call_count = 0;
+        let stage = Arc::new(AtomicUsize::new(0));
+        let stage_clone = stage.clone();
+
         ctrlc::set_handler(move || {
-            if self.receiver.is_some() {
+            if stage_clone.load(Ordering::SeqCst) == 0 {
                 if call_count == 0 {
                     println!("Backup interrputed, starting containers... Press Ctrl+C again to force exit");
                     sender
@@ -166,10 +170,12 @@ impl DockerBackup {
 
         self.receiver = Some(receiver);
 
-        self.backup().unwrap_or_else(|err| {
+        if let Err(err) = self.backup() {
             err.notify(&self);
-        });
-        self.receiver = None;
+            return self;
+        }
+        stage.store(1, Ordering::SeqCst);
+        thread::sleep(std::time::Duration::from_secs(10));
         self.notify().unwrap_or_else(|err| {
             println!("Notification error: {}", err);
         });
