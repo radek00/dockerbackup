@@ -134,7 +134,11 @@ impl DockerBackup {
         if !running_containers.is_empty() {
             println!("Stopping containers...");
             handle_containers(&running_containers, "stop")?;
-            self.run(Some(&running_containers))?;
+            if let Err(err) = self.run(Some(&running_containers)) {
+                println!("Backup error: {}. Starting containers...", err.message);
+                handle_containers(&running_containers, "start")?;
+                return Err(err);
+            }
             println!("Starting containers...");
             handle_containers(&running_containers, "start")?;
         } else {
@@ -257,7 +261,7 @@ impl DockerBackup {
             .stdin(Stdio::from(tar_exec.stdout.unwrap()))
             .spawn()?;
 
-        return Ok(ssh);
+        Ok(ssh)
     }
 }
 
