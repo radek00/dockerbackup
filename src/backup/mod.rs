@@ -133,11 +133,11 @@ impl DockerBackup {
         if !running_containers.is_empty() {
             println!("Stopping containers...");
             handle_containers(&running_containers, "stop")?;
-            self.run()?;
+            self.run(Some(&running_containers))?;
             println!("Starting containers...");
             handle_containers(&running_containers, "start")?;
         } else {
-            self.run()?;
+            self.run(None)?;
         }
         self.notify().unwrap_or_else(|err| {
             println!("Notification error: {}", err);
@@ -151,13 +151,13 @@ impl DockerBackup {
         });
         self
     }
-    fn run(&self) -> Result<bool, BackupError> {
+    fn run(&self, running_containers: Option<&Vec<&str>>) -> Result<bool, BackupError> {
         let (sender, receiver): (mpsc::Sender<()>, mpsc::Receiver<()>) = mpsc::channel();
         let mut call_count = 0;
         ctrlc::set_handler(move || {
             call_count += 1;
             // Signal handler: This block is executed when a ctrl+c signal is received
-            println!("Backup interrputed, trying to finish... Press Ctrl+C again to force exit");
+            println!("Backup interrputed, starting containers... Press Ctrl+C again to force exit");
             sender
                 .send(())
                 .expect("Could not send signal through channel");
@@ -168,9 +168,12 @@ impl DockerBackup {
             //r.store(false, Ordering::SeqCst);
         })
         .expect("Error setting Ctrl-C handler");
+        let error_type;
         let mut backup_handle = if self.dest_path.0.contains('@') {
+            error_type = "Ssh";
             self.ssh_backup()
         } else {
+            error_type = "Rsync";
             self.local_rsync_backup()
         }?;
 
@@ -181,10 +184,13 @@ impl DockerBackup {
                     if status.success() {
                         return Ok(true);
                     }
-                    return Err(BackupError::new(&format!("Ssh backup failed",)));
+                    return Err(BackupError::new(&format!("{} backup failed", error_type)));
                 } else if receiver.try_recv().is_ok() {
                     println!("Received message");
-                    backup_handle.kill().expect("Failed to kill ssh process");
+                    backup_handle.kill().expect("Failed to kill backup process");
+                    if let Some(containers) = running_containers {
+                        handle_containers(containers, "start")?;
+                    }
                     return Err(BackupError::new("Backup interrupted"));
                 }
             }
