@@ -25,7 +25,9 @@ impl BackupError {
                 success: false,
                 url: gotify_url,
             })
-            .unwrap();
+            .unwrap_or_else(|e| {
+                eprintln!("Error sending gotify notification: {}", e);
+            });
         }
 
         if let Some(dc_url) = &config.discord_url {
@@ -34,7 +36,9 @@ impl BackupError {
                 success: false,
                 url: dc_url,
             })
-            .unwrap();
+            .unwrap_or_else(|e| {
+                eprintln!("Error sending discord notification: {}", e);
+            });
         }
     }
 }
