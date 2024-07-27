@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::Duration;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
     validate_destination_path,
@@ -135,15 +136,16 @@ impl DockerBackup {
         if !running_containers.is_empty() {
             println!("Stopping containers...");
             handle_containers(&running_containers, "stop")?;
-            if let Err(err) = self.run(Some(&running_containers)) {
-                println!("Backup error: {}. Starting containers...", err.message);
+            if let Err(err) = self.run() {
+                println!("Backup error: {}", err.message);
+                println!("Starting containers...");
                 handle_containers(&running_containers, "start")?;
                 return Err(err);
             }
             println!("Starting containers...");
             handle_containers(&running_containers, "start")?;
         } else {
-            self.run(None)?;
+            self.run()?;
         }
 
         Ok(())
@@ -157,7 +159,8 @@ impl DockerBackup {
         ctrlc::set_handler(move || {
             if stage_clone.load(Ordering::SeqCst) == 0 {
                 if call_count == 0 {
-                    println!("Backup interrputed, starting containers... Press Ctrl+C again to force exit");
+                    println!();
+                    println!("Backup interrputed, press Ctrl+C again to force exit");
                     sender
                         .send(())
                         .expect("Could not send signal through channel");
@@ -186,7 +189,7 @@ impl DockerBackup {
         });
         self
     }
-    fn run(&self, running_containers: Option<&Vec<&str>>) -> Result<bool, BackupError> {
+    fn run(&self) -> Result<bool, BackupError> {
         let error_type;
         let mut backup_handle = if self.dest_path.0.contains('@') {
             error_type = "Ssh";
@@ -224,11 +227,8 @@ impl DockerBackup {
                         return Err(BackupError::new(&format!("{} backup error", error_type)));
                     }
                 } else if self.receiver.as_ref().unwrap().try_recv().is_ok() {
-                    println!("Received message");
-                    backup_handle.kill().expect("Failed to kill backup process");
-                    if let Some(containers) = running_containers {
-                        handle_containers(containers, "start")?;
-                    }
+                    println!("Starting contaners...");
+                    backup_handle.kill()?;
                     return Err(BackupError::new("Backup interrupted"));
                 }
             }
