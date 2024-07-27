@@ -181,7 +181,6 @@ impl DockerBackup {
             return self;
         }
         stage.store(1, Ordering::SeqCst);
-        thread::sleep(std::time::Duration::from_secs(10));
         self.notify().unwrap_or_else(|err| {
             println!("Notification error: {}", err);
         });
