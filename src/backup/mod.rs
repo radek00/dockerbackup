@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
     validate_destination_path,
