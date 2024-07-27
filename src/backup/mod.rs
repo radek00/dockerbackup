@@ -131,7 +131,6 @@ impl DockerBackup {
         let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
         running_containers.retain(|&x| !x.is_empty());
 
-        println!("Backup started...");
         if !running_containers.is_empty() {
             println!("Stopping containers...");
             handle_containers(&running_containers, "stop")?;
@@ -189,6 +188,7 @@ impl DockerBackup {
         self
     }
     fn run(&self) -> Result<bool, BackupError> {
+        println!("Backup started...");
         let error_type;
         let mut backup_handle = if self.dest_path.0.contains('@') {
             error_type = "Ssh";
