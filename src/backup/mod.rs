@@ -8,7 +8,6 @@ use std::process::{exit, Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc};
-use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
     validate_destination_path,
@@ -18,7 +17,7 @@ mod backup_error;
 mod notification;
 mod utils;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TargetOs {
     Unix,
     Windows,
@@ -37,7 +36,7 @@ impl TargetOs {
 }
 
 pub struct DockerBackup {
-    dest_path: (String, TargetOs),
+    pub dest_path: Vec<(String, TargetOs)>,
     new_dir: String,
     volume_path: PathBuf,
     excluded_directories: Vec<String>,
@@ -60,7 +59,7 @@ impl DockerBackup {
             .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
             .placeholder(AnsiColor::Yellow.on_default()))
             .arg(clap::Arg::new("dest_path")
-                .help("Backup destination path. Accepts local or remote ssh path. Target os must be provided with ssh paths. [/backup or user@host:/backup, windows]")
+                .help("Accepts multile local or remote ssh destination paths. Destination paths must be separated by ^ and in format [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.")
                 .required(true)
                 .value_parser(validate_destination_path)
                 .short('d')
@@ -97,7 +96,7 @@ impl DockerBackup {
 
         DockerBackup {
             dest_path: matches
-                .remove_one::<(String, TargetOs)>("dest_path")
+                .remove_one::<Vec<(String, TargetOs)>>("dest_path")
                 .unwrap(),
             new_dir,
             volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
@@ -189,7 +188,7 @@ impl DockerBackup {
     fn run(&self) -> Result<bool, BackupError> {
         println!("Backup started...");
         let error_type;
-        let mut backup_handle = if self.dest_path.0.contains('@') {
+        let mut backup_handle = if self.dest_path[0].0.contains('@') {
             error_type = "Ssh";
             self.ssh_backup()
         } else {
@@ -233,7 +232,7 @@ impl DockerBackup {
         }
     }
     fn local_rsync_backup(&self) -> Result<Child, BackupError> {
-        let dest_path = Path::new(&self.dest_path.0);
+        let dest_path = Path::new(&self.dest_path[0].0);
         if !create_new_dir(dest_path, &self.new_dir)? {
             return Err(BackupError::new("Error creating new directory"));
         }
@@ -260,13 +259,13 @@ impl DockerBackup {
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
-        let ssh_path_parts: Vec<&str> = self.dest_path.0.splitn(2, ':').collect();
+        let ssh_path_parts: Vec<&str> = self.dest_path[0].0.splitn(2, ':').collect();
 
         if ssh_path_parts.len() != 2 {
             return Err(BackupError::new("Invalid ssh path"));
         }
 
-        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &self.dest_path.1);
+        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &self.dest_path[0].1);
 
         let ssh = Command::new("ssh")
             .arg(ssh_path_parts[0])

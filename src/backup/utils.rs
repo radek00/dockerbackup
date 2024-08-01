@@ -53,7 +53,7 @@ pub fn validate_destination_path(val: &str) -> Result<Vec<(String, TargetOs)>, S
                     "Destination path and target os must be provided",
                 ));
             }
-    
+
             let parts: Vec<&str> = tuple[0].splitn(2, ':').collect();
             if parts.len() == 2 && parts[0].contains('@') {
                 Ok((tuple[0].to_owned(), TargetOs::from_str(tuple[1])?))
@@ -64,7 +64,6 @@ pub fn validate_destination_path(val: &str) -> Result<Vec<(String, TargetOs)>, S
             }
         } else if Path::new(path).exists() {
             Ok((path.to_owned(), TargetOs::Windows))
-
         } else {
             Err(String::from("Local path does not exist"))
         }
