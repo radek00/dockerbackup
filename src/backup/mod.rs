@@ -6,7 +6,7 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use utils::{
@@ -43,7 +43,8 @@ pub struct DockerBackup {
     excluded_directories: Vec<String>,
     gotify_url: Option<String>,
     discord_url: Option<String>,
-    receiver: Option<Receiver<()>>,
+    receiver: Option<Receiver<Result<bool, BackupError>>>,
+    sender: Option<Sender<Result<bool, BackupError>>>,
 }
 
 impl DockerBackup {
@@ -105,6 +106,7 @@ impl DockerBackup {
             gotify_url: matches.remove_one::<String>("gotify_url"),
             discord_url: matches.remove_one::<String>("discord_url"),
             receiver: None,
+            sender: None,
         }
     }
     fn notify(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -149,18 +151,22 @@ impl DockerBackup {
         Ok(())
     }
     pub fn backup_volumes(mut self) -> Self {
-        let (sender, receiver): (mpsc::Sender<()>, mpsc::Receiver<()>) = mpsc::channel();
+        let (sender, receiver): (
+            mpsc::Sender<Result<bool, BackupError>>,
+            mpsc::Receiver<Result<bool, BackupError>>,
+        ) = mpsc::channel();
         let mut call_count = 0;
         let stage = Arc::new(AtomicUsize::new(0));
         let stage_clone = stage.clone();
 
+        let sender_clone = sender.clone();
         ctrlc::set_handler(move || {
             if stage_clone.load(Ordering::SeqCst) == 0 {
                 if call_count == 0 {
                     println!();
                     println!("Backup interrputed, press Ctrl+C again to force exit");
-                    sender
-                        .send(())
+                    sender_clone
+                        .send(Err(BackupError::new("Backup interrupted")))
                         .expect("Could not send signal through channel");
                     call_count += 1;
                 } else {
@@ -175,6 +181,7 @@ impl DockerBackup {
         .expect("Error setting Ctrl-C handler");
 
         self.receiver = Some(receiver);
+        self.sender = Some(sender);
 
         if let Err(err) = self.backup() {
             err.notify(&self);
@@ -202,9 +209,9 @@ impl DockerBackup {
             };
         }
 
-        let mut backup_results: Vec<Result<bool, BackupError>> = Vec::new();
-
+        let sender = self.sender.as_ref().unwrap();
         for mut handle in backup_handles {
+            let sender_clone = sender.clone();
             let join_handle = thread::spawn(move || {
                 let stderr = handle.0.stderr.take();
                 let mut stderr_reader = stderr.map(BufReader::new);
@@ -213,27 +220,41 @@ impl DockerBackup {
                     if let Ok(exist_status) = handle.0.try_wait() {
                         if let Some(status) = exist_status {
                             if status.success() {
-                                return Ok(true);
+                                //send
+                                thread::sleep(std::time::Duration::from_secs(10));
+                                sender_clone
+                                    .send(Ok(true))
+                                    .expect("Could not send signal through channel");
+                                return;
                             }
                             if let Some(reader) = stderr_reader.as_mut() {
                                 match reader.read_to_end(&mut buffer) {
                                     Ok(_) => {
                                         let stderr_output = String::from_utf8_lossy(&buffer);
-                                        return Err(BackupError::new(&stderr_output));
+                                        sender_clone
+                                            .send(Err(BackupError::new(&stderr_output)))
+                                            .expect("Could not send signal through channel");
+                                        return;
                                     }
                                     Err(e) => {
                                         eprintln!("Failed to read stderr: {}", e);
-                                        return Err(BackupError::new(&format!(
-                                            "{} backup error",
-                                            handle.1
-                                        )));
+                                        sender_clone
+                                            .send(Err(BackupError::new(&format!(
+                                                "{} backup error",
+                                                handle.1
+                                            ))))
+                                            .expect("Could not send signal through channel");
+                                        return;
                                     }
                                 }
                             } else {
-                                return Err(BackupError::new(&format!(
-                                    "{} backup error",
-                                    handle.1
-                                )));
+                                sender_clone
+                                    .send(Err(BackupError::new(&format!(
+                                        "{} backup error",
+                                        handle.1
+                                    ))))
+                                    .expect("Could not send signal through channel");
+                                return;
                             }
                         }
                     }
@@ -241,11 +262,41 @@ impl DockerBackup {
             });
         }
 
+        let mut backup_results: Vec<Result<bool, BackupError>> = Vec::new();
         loop {
-            if self.receiver.as_ref().unwrap().try_recv().is_ok() {
-                println!("Starting contaners...");
-                //backup_handle.kill()?;
-                return Err(BackupError::new("Backup interrupted"));
+            // if self.receiver.as_ref().unwrap().try_recv().is_ok() {
+            //     println!("Starting contaners...");
+            //     //backup_handle.kill()?;
+            //     return Err(BackupError::new("Backup interrupted"));
+            // }
+
+            match self.receiver.as_ref().unwrap().try_recv() {
+                Ok(message) => {
+                    match message {
+                        Ok(result) => {
+                            println!("Ok result");
+                            backup_results.push(Ok(result));
+                        }
+                        Err(err) => {
+                            if err.message == "Backup interrupted" {
+                                // for mut handle in backup_handles {
+                                //     handle.0.kill()?;
+
+                                // }
+                                return Err(err);
+                            }
+                            println!("Err result: {}", err.message);
+                            backup_results.push(Err(err));
+                            //return Err(err);
+                        }
+                    }
+                    if backup_results.len() == self.dest_path.len() {
+                        return Ok(true);
+                    }
+                }
+                Err(_) => {
+                    continue;
+                }
             }
         }
         // loop {
