@@ -8,6 +8,7 @@ use std::process::{exit, Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{mpsc, Arc};
+use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
     validate_destination_path,
@@ -187,49 +188,96 @@ impl DockerBackup {
     }
     fn run(&self) -> Result<bool, BackupError> {
         println!("Backup started...");
-        let error_type;
-        let mut backup_handle = if self.dest_path[0].0.contains('@') {
-            error_type = "Ssh";
-            self.ssh_backup()
-        } else {
-            error_type = "Rsync";
-            self.local_rsync_backup()
-        }?;
+        //let error_type;
 
-        let stderr = backup_handle.stderr.take();
-        let mut stderr_reader = stderr.map(BufReader::new);
-        let mut buffer = Vec::new();
+        let mut backup_handles: Vec<(Child, &str)> = Vec::new();
 
-        loop {
-            if let Ok(exist_status) = backup_handle.try_wait() {
-                if let Some(status) = exist_status {
-                    if status.success() {
-                        return Ok(true);
-                    }
-                    if let Some(reader) = stderr_reader.as_mut() {
-                        match reader.read_to_end(&mut buffer) {
-                            Ok(_) => {
-                                let stderr_output = String::from_utf8_lossy(&buffer);
-                                return Err(BackupError::new(&stderr_output));
+        for dest in &self.dest_path {
+            if dest.0.contains('@') {
+                //error_type = "Ssh";
+                backup_handles.push((self.ssh_backup()?, "Ssh"));
+            } else {
+                //error_type = "Rsync";
+                backup_handles.push((self.local_rsync_backup()?, "Rsync"));
+            };
+        }
+
+        let mut backup_results: Vec<Result<bool, BackupError>> = Vec::new();
+
+        for mut handle in backup_handles {
+            let join_handle = thread::spawn(move || {
+                let stderr = handle.0.stderr.take();
+                let mut stderr_reader = stderr.map(BufReader::new);
+                let mut buffer = Vec::new();
+                loop {
+                    if let Ok(exist_status) = handle.0.try_wait() {
+                        if let Some(status) = exist_status {
+                            if status.success() {
+                                return Ok(true);
                             }
-                            Err(e) => {
-                                eprintln!("Failed to read stderr: {}", e);
+                            if let Some(reader) = stderr_reader.as_mut() {
+                                match reader.read_to_end(&mut buffer) {
+                                    Ok(_) => {
+                                        let stderr_output = String::from_utf8_lossy(&buffer);
+                                        return Err(BackupError::new(&stderr_output));
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to read stderr: {}", e);
+                                        return Err(BackupError::new(&format!(
+                                            "{} backup error",
+                                            handle.1
+                                        )));
+                                    }
+                                }
+                            } else {
                                 return Err(BackupError::new(&format!(
                                     "{} backup error",
-                                    error_type
+                                    handle.1
                                 )));
                             }
                         }
-                    } else {
-                        return Err(BackupError::new(&format!("{} backup error", error_type)));
                     }
-                } else if self.receiver.as_ref().unwrap().try_recv().is_ok() {
-                    println!("Starting contaners...");
-                    backup_handle.kill()?;
-                    return Err(BackupError::new("Backup interrupted"));
                 }
+            });
+        }
+
+        loop {
+            if self.receiver.as_ref().unwrap().try_recv().is_ok() {
+                println!("Starting contaners...");
+                //backup_handle.kill()?;
+                return Err(BackupError::new("Backup interrupted"));
             }
         }
+        // loop {
+        //     if let Ok(exist_status) = backup_handle.try_wait() {
+        //         if let Some(status) = exist_status {
+        //             if status.success() {
+        //                 return Ok(true);
+        //             }
+        //             if let Some(reader) = stderr_reader.as_mut() {
+        //                 match reader.read_to_end(&mut buffer) {
+        //                     Ok(_) => {
+        //                         let stderr_output = String::from_utf8_lossy(&buffer);
+        //                         return Err(BackupError::new(&stderr_output));
+        //                     }
+        //                     Err(e) => {
+        //                         eprintln!("Failed to read stderr: {}", e);
+        //                         return Err(BackupError::new(&format!(
+        //                             "{} backup error",
+        //                             error_type
+        //                         )));
+        //                     }
+        //                 }
+        //             } else {
+        //                 return Err(BackupError::new(&format!("{} backup error", error_type)));
+        //             }
+        //         } else if self.receiver.as_ref().unwrap().try_recv().is_ok() {
+        //             println!("Starting contaners...");
+        //             backup_handle.kill()?;
+        //             return Err(BackupError::new("Backup interrupted"));
+        //         }
+        //     }
+        // }
     }
     fn local_rsync_backup(&self) -> Result<Child, BackupError> {
         let dest_path = Path::new(&self.dest_path[0].0);
