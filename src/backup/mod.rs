@@ -222,38 +222,26 @@ impl DockerBackup {
                 let stderr = handle.0.lock().unwrap().stderr.take();
                 let mut stderr_reader = stderr.map(BufReader::new);
                 let mut buffer = Vec::new();
-                loop {
-                    if let Ok(exist_status) = handle.0.lock().unwrap().try_wait() {
-                        if let Some(status) = exist_status {
-                            if status.success() {
-                                //send
-                                thread::sleep(std::time::Duration::from_secs(10));
+
+                if let Ok(status) = handle.0.lock().unwrap().wait() {
+                    if status.success() {
+                        //send
+                        thread::sleep(std::time::Duration::from_secs(10));
+                        sender_clone
+                            .send(Ok(true))
+                            .expect("Could not send signal through channel");
+                        return;
+                    } else if let Some(reader) = stderr_reader.as_mut() {
+                        match reader.read_to_end(&mut buffer) {
+                            Ok(_) => {
+                                let stderr_output = String::from_utf8_lossy(&buffer);
                                 sender_clone
-                                    .send(Ok(true))
+                                    .send(Err(BackupError::new(&stderr_output)))
                                     .expect("Could not send signal through channel");
                                 return;
                             }
-                            if let Some(reader) = stderr_reader.as_mut() {
-                                match reader.read_to_end(&mut buffer) {
-                                    Ok(_) => {
-                                        let stderr_output = String::from_utf8_lossy(&buffer);
-                                        sender_clone
-                                            .send(Err(BackupError::new(&stderr_output)))
-                                            .expect("Could not send signal through channel");
-                                        return;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to read stderr: {}", e);
-                                        sender_clone
-                                            .send(Err(BackupError::new(&format!(
-                                                "{} backup error",
-                                                handle.1
-                                            ))))
-                                            .expect("Could not send signal through channel");
-                                        return;
-                                    }
-                                }
-                            } else {
+                            Err(e) => {
+                                eprintln!("Failed to read stderr: {}", e);
                                 sender_clone
                                     .send(Err(BackupError::new(&format!(
                                         "{} backup error",
@@ -263,6 +251,11 @@ impl DockerBackup {
                                 return;
                             }
                         }
+                    } else {
+                        sender_clone
+                            .send(Err(BackupError::new(&format!("{} backup error", handle.1))))
+                            .expect("Could not send signal through channel");
+                        return;
                     }
                 }
             });
