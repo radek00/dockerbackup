@@ -18,6 +18,11 @@ mod backup_error;
 mod notification;
 mod utils;
 
+type BackupChannel = (
+    mpsc::Sender<Result<bool, BackupError>>,
+    mpsc::Receiver<Result<bool, BackupError>>,
+);
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TargetOs {
     Unix,
@@ -151,10 +156,7 @@ impl DockerBackup {
         Ok(())
     }
     pub fn backup_volumes(mut self) -> Self {
-        let (sender, receiver): (
-            mpsc::Sender<Result<bool, BackupError>>,
-            mpsc::Receiver<Result<bool, BackupError>>,
-        ) = mpsc::channel();
+        let (sender, receiver): BackupChannel  = mpsc::channel();
         let mut call_count = 0;
         let stage = Arc::new(AtomicUsize::new(0));
         let stage_clone = stage.clone();
@@ -224,13 +226,13 @@ impl DockerBackup {
                 let mut buffer = Vec::new();
 
                 if let Ok(status) = handle.0.lock().unwrap().wait() {
+                    println!("lock acquired");
                     if status.success() {
                         //send
                         thread::sleep(std::time::Duration::from_secs(10));
                         sender_clone
                             .send(Ok(true))
                             .expect("Could not send signal through channel");
-                        return;
                     } else if let Some(reader) = stderr_reader.as_mut() {
                         match reader.read_to_end(&mut buffer) {
                             Ok(_) => {
@@ -277,13 +279,14 @@ impl DockerBackup {
                                     handle.0.lock().unwrap().kill()?;
                                 }
                                 for join_handle in join_handles {
-                                    join_handle.join().unwrap();
+                                    if let Err(err) = join_handle.join() {
+                                        eprintln!("Error joining thread: {:?}", err);
+                                    }
                                 }
                                 return Err(err);
                             }
                             println!("Err result: {}", err.message);
                             backup_results.push(Err(err));
-                            //return Err(err);
                         }
                     }
                     if backup_results.len() == self.dest_path.len() {
@@ -301,36 +304,6 @@ impl DockerBackup {
                 }
             }
         }
-        // loop {
-        //     if let Ok(exist_status) = backup_handle.try_wait() {
-        //         if let Some(status) = exist_status {
-        //             if status.success() {
-        //                 return Ok(true);
-        //             }
-        //             if let Some(reader) = stderr_reader.as_mut() {
-        //                 match reader.read_to_end(&mut buffer) {
-        //                     Ok(_) => {
-        //                         let stderr_output = String::from_utf8_lossy(&buffer);
-        //                         return Err(BackupError::new(&stderr_output));
-        //                     }
-        //                     Err(e) => {
-        //                         eprintln!("Failed to read stderr: {}", e);
-        //                         return Err(BackupError::new(&format!(
-        //                             "{} backup error",
-        //                             error_type
-        //                         )));
-        //                     }
-        //                 }
-        //             } else {
-        //                 return Err(BackupError::new(&format!("{} backup error", error_type)));
-        //             }
-        //         } else if self.receiver.as_ref().unwrap().try_recv().is_ok() {
-        //             println!("Starting contaners...");
-        //             backup_handle.kill()?;
-        //             return Err(BackupError::new("Backup interrupted"));
-        //         }
-        //     }
-        // }
     }
     fn local_rsync_backup(&self, dest_path: &(String, TargetOs)) -> Result<Child, BackupError> {
         let dest_path = Path::new(&dest_path.0);
