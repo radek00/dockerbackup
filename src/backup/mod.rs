@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
@@ -197,27 +197,33 @@ impl DockerBackup {
         println!("Backup started...");
         //let error_type;
 
-        let mut backup_handles: Vec<(Child, &str)> = Vec::new();
+        let mut backup_handles: Vec<(Arc<Mutex<Child>>, &str)> = Vec::new();
 
         for dest in &self.dest_path {
             if dest.0.contains('@') {
                 //error_type = "Ssh";
-                backup_handles.push((self.ssh_backup()?, "Ssh"));
+                backup_handles.push((Arc::new(Mutex::new(self.ssh_backup(dest)?)), "Ssh"));
             } else {
                 //error_type = "Rsync";
-                backup_handles.push((self.local_rsync_backup()?, "Rsync"));
+                backup_handles.push((
+                    Arc::new(Mutex::new(self.local_rsync_backup(dest)?)),
+                    "Rsync",
+                ));
             };
         }
 
         let sender = self.sender.as_ref().unwrap();
-        for mut handle in backup_handles {
+        let mut join_handles: Vec<thread::JoinHandle<()>> = Vec::new();
+
+        for handle in &backup_handles {
             let sender_clone = sender.clone();
+            let handle = handle.clone();
             let join_handle = thread::spawn(move || {
-                let stderr = handle.0.stderr.take();
+                let stderr = handle.0.lock().unwrap().stderr.take();
                 let mut stderr_reader = stderr.map(BufReader::new);
                 let mut buffer = Vec::new();
                 loop {
-                    if let Ok(exist_status) = handle.0.try_wait() {
+                    if let Ok(exist_status) = handle.0.lock().unwrap().try_wait() {
                         if let Some(status) = exist_status {
                             if status.success() {
                                 //send
@@ -260,16 +266,11 @@ impl DockerBackup {
                     }
                 }
             });
+            join_handles.push(join_handle);
         }
 
         let mut backup_results: Vec<Result<bool, BackupError>> = Vec::new();
         loop {
-            // if self.receiver.as_ref().unwrap().try_recv().is_ok() {
-            //     println!("Starting contaners...");
-            //     //backup_handle.kill()?;
-            //     return Err(BackupError::new("Backup interrupted"));
-            // }
-
             match self.receiver.as_ref().unwrap().try_recv() {
                 Ok(message) => {
                     match message {
@@ -279,10 +280,12 @@ impl DockerBackup {
                         }
                         Err(err) => {
                             if err.message == "Backup interrupted" {
-                                // for mut handle in backup_handles {
-                                //     handle.0.kill()?;
-
-                                // }
+                                for handle in backup_handles {
+                                    handle.0.lock().unwrap().kill()?;
+                                }
+                                for join_handle in join_handles {
+                                    join_handle.join().unwrap();
+                                }
                                 return Err(err);
                             }
                             println!("Err result: {}", err.message);
@@ -291,6 +294,12 @@ impl DockerBackup {
                         }
                     }
                     if backup_results.len() == self.dest_path.len() {
+                        println!("Backup finished");
+                        for join_handle in join_handles {
+                            if let Err(err) = join_handle.join() {
+                                eprintln!("Error joining thread: {:?}", err);
+                            }
+                        }
                         return Ok(true);
                     }
                 }
@@ -330,8 +339,8 @@ impl DockerBackup {
         //     }
         // }
     }
-    fn local_rsync_backup(&self) -> Result<Child, BackupError> {
-        let dest_path = Path::new(&self.dest_path[0].0);
+    fn local_rsync_backup(&self, dest_path: &(String, TargetOs)) -> Result<Child, BackupError> {
+        let dest_path = Path::new(&dest_path.0);
         if !create_new_dir(dest_path, &self.new_dir)? {
             return Err(BackupError::new("Error creating new directory"));
         }
@@ -349,7 +358,7 @@ impl DockerBackup {
 
         Ok(exec_rsync)
     }
-    fn ssh_backup(&self) -> Result<Child, BackupError> {
+    fn ssh_backup(&self, dest_path: &(String, TargetOs)) -> Result<Child, BackupError> {
         let mut tar_volumes = Command::new("tar");
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
@@ -358,13 +367,13 @@ impl DockerBackup {
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
-        let ssh_path_parts: Vec<&str> = self.dest_path[0].0.splitn(2, ':').collect();
+        let ssh_path_parts: Vec<&str> = dest_path.0.splitn(2, ':').collect();
 
         if ssh_path_parts.len() != 2 {
             return Err(BackupError::new("Invalid ssh path"));
         }
 
-        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &self.dest_path[0].1);
+        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &dest_path.1);
 
         let ssh = Command::new("ssh")
             .arg(ssh_path_parts[0])
