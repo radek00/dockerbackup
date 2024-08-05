@@ -5,7 +5,6 @@ use notification::{send_notification, Discord, Gotify};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -19,8 +18,8 @@ mod notification;
 mod utils;
 
 type BackupChannel = (
-    mpsc::Sender<Result<bool, BackupError>>,
-    mpsc::Receiver<Result<bool, BackupError>>,
+    mpsc::Sender<Result<String, BackupError>>,
+    mpsc::Receiver<Result<String, BackupError>>,
 );
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -48,8 +47,8 @@ pub struct DockerBackup {
     excluded_directories: Vec<String>,
     gotify_url: Option<String>,
     discord_url: Option<String>,
-    receiver: Option<Receiver<Result<bool, BackupError>>>,
-    sender: Option<Sender<Result<bool, BackupError>>>,
+    receiver: Option<Receiver<Result<String, BackupError>>>,
+    sender: Option<Sender<Result<String, BackupError>>>,
 }
 
 impl DockerBackup {
@@ -114,22 +113,25 @@ impl DockerBackup {
             sender: None,
         }
     }
-    fn notify(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn notify(&self, message: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(gotify_url) = &self.gotify_url {
             send_notification::<Gotify>(Gotify {
-                message: None,
+                message,
                 success: true,
                 url: gotify_url,
             })?;
+            return Ok(());
         }
 
         if let Some(dc_url) = &self.discord_url {
             send_notification::<Discord>(Discord {
-                message: None,
+                message,
                 success: true,
                 url: dc_url,
             })?;
+            return Ok(());
         }
+
         Ok(())
     }
     fn backup(&self) -> Result<(), BackupError> {
@@ -152,31 +154,23 @@ impl DockerBackup {
         } else {
             self.run()?;
         }
-
         Ok(())
     }
     pub fn backup_volumes(mut self) -> Self {
-        let (sender, receiver): BackupChannel  = mpsc::channel();
+        let (sender, receiver): BackupChannel = mpsc::channel();
         let mut call_count = 0;
-        let stage = Arc::new(AtomicUsize::new(0));
-        let stage_clone = stage.clone();
 
         let sender_clone = sender.clone();
         ctrlc::set_handler(move || {
-            if stage_clone.load(Ordering::SeqCst) == 0 {
-                if call_count == 0 {
-                    println!();
-                    println!("Backup interrputed, press Ctrl+C again to force exit");
-                    sender_clone
-                        .send(Err(BackupError::new("Backup interrupted")))
-                        .expect("Could not send signal through channel");
-                    call_count += 1;
-                } else {
-                    println!("Forcing exit...");
-                    exit(1);
-                }
+            if call_count == 0 {
+                println!();
+                println!("Backup interrputed, press Ctrl+C again to force exit");
+                sender_clone
+                    .send(Err(BackupError::new("Backup interrupted")))
+                    .expect("Could not send signal through channel");
+                call_count += 1;
             } else {
-                println!("Exiting...");
+                println!("Forcing exit...");
                 exit(1);
             }
         })
@@ -189,13 +183,9 @@ impl DockerBackup {
             err.notify(&self);
             return self;
         }
-        stage.store(1, Ordering::SeqCst);
-        self.notify().unwrap_or_else(|err| {
-            println!("Notification error: {}", err);
-        });
         self
     }
-    fn run(&self) -> Result<bool, BackupError> {
+    fn run(&self) -> Result<(), BackupError> {
         println!("Backup started...");
         //let error_type;
 
@@ -231,7 +221,7 @@ impl DockerBackup {
                         //send
                         thread::sleep(std::time::Duration::from_secs(10));
                         sender_clone
-                            .send(Ok(true))
+                            .send(Ok(format!("{} backup successful", handle.1)))
                             .expect("Could not send signal through channel");
                     } else if let Some(reader) = stderr_reader.as_mut() {
                         match reader.read_to_end(&mut buffer) {
@@ -264,14 +254,17 @@ impl DockerBackup {
             join_handles.push(join_handle);
         }
 
-        let mut backup_results: Vec<Result<bool, BackupError>> = Vec::new();
+        let mut result_count: usize = 0;
         loop {
             match self.receiver.as_ref().unwrap().try_recv() {
                 Ok(message) => {
                     match message {
                         Ok(result) => {
                             println!("Ok result");
-                            backup_results.push(Ok(result));
+                            self.notify(Some(result)).unwrap_or_else(|err| {
+                                eprintln!("Error sending notification: {}", err);
+                            });
+                            result_count += 1;
                         }
                         Err(err) => {
                             if err.message == "Backup interrupted" {
@@ -286,17 +279,18 @@ impl DockerBackup {
                                 return Err(err);
                             }
                             println!("Err result: {}", err.message);
-                            backup_results.push(Err(err));
+                            err.notify(self);
+                            result_count += 1;
                         }
                     }
-                    if backup_results.len() == self.dest_path.len() {
+                    if result_count == self.dest_path.len() {
                         println!("Backup finished");
                         for join_handle in join_handles {
                             if let Err(err) = join_handle.join() {
                                 eprintln!("Error joining thread: {:?}", err);
                             }
                         }
-                        return Ok(true);
+                        return Ok(());
                     }
                 }
                 Err(_) => {
