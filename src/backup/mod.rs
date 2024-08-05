@@ -116,11 +116,10 @@ impl DockerBackup {
     fn notify(&self, message: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(gotify_url) = &self.gotify_url {
             send_notification::<Gotify>(Gotify {
-                message,
+                message: message.clone(),
                 success: true,
                 url: gotify_url,
             })?;
-            return Ok(());
         }
 
         if let Some(dc_url) = &self.discord_url {
@@ -129,7 +128,6 @@ impl DockerBackup {
                 success: true,
                 url: dc_url,
             })?;
-            return Ok(());
         }
 
         Ok(())
