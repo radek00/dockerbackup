@@ -253,6 +253,7 @@ impl DockerBackup {
         }
 
         let mut result_count: usize = 0;
+        let mut errors: Vec<BackupError> = Vec::new();
         loop {
             match self.receiver.as_ref().unwrap().try_recv() {
                 Ok(message) => {
@@ -277,7 +278,7 @@ impl DockerBackup {
                                 return Err(err);
                             }
                             println!("Err result: {}", err.message);
-                            err.notify(self);
+                            errors.push(err);
                             result_count += 1;
                         }
                     }
@@ -287,6 +288,10 @@ impl DockerBackup {
                             if let Err(err) = join_handle.join() {
                                 eprintln!("Error joining thread: {:?}", err);
                             }
+                        }
+
+                        for error in errors {
+                            error.notify(self);
                         }
                         return Ok(());
                     }
