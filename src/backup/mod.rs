@@ -279,7 +279,7 @@ impl DockerBackup {
                                         eprintln!("Error joining thread: {:?}", err);
                                     }
                                 }
-
+                                errors.push(BackupError::new("Backup interrupted"));
                                 return Err(errors);
                             }
                             println!("Err result: {}", err.message);
