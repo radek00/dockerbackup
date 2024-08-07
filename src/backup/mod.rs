@@ -132,29 +132,12 @@ impl DockerBackup {
 
         Ok(())
     }
-    fn backup(&self) -> Result<(), BackupError> {
+    pub fn backup(mut self) -> Result<(), BackupError> {
         check_docker()?;
         let containers = check_running_containers()?;
         let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
         running_containers.retain(|&x| !x.is_empty());
 
-        if !running_containers.is_empty() {
-            println!("Stopping containers...");
-            handle_containers(&running_containers, "stop")?;
-            if let Err(err) = self.run() {
-                println!("Backup error: {}", err.message);
-                println!("Starting containers...");
-                handle_containers(&running_containers, "start")?;
-                return Err(err);
-            }
-            println!("Starting containers...");
-            handle_containers(&running_containers, "start")?;
-        } else {
-            self.run()?;
-        }
-        Ok(())
-    }
-    pub fn backup_volumes(mut self) -> Self {
         let (sender, receiver): BackupChannel = mpsc::channel();
         let mut call_count = 0;
 
@@ -177,28 +160,49 @@ impl DockerBackup {
         self.receiver = Some(receiver);
         self.sender = Some(sender);
 
-        if let Err(err) = self.backup() {
-            err.notify(&self);
-            return self;
+        if !running_containers.is_empty() {
+            handle_containers(&running_containers, "stop")?;
         }
-        self
+
+        if let Err(errors) = self.run() {
+            if !running_containers.is_empty() {
+                handle_containers(&running_containers, "start")?;
+            }
+            for err in errors {
+                err.notify(&self);
+            }
+        } else if !running_containers.is_empty() {
+            handle_containers(&running_containers, "start")?;
+        }
+        Ok(())
     }
-    fn run(&self) -> Result<(), BackupError> {
+    fn run(&self) -> Result<(), Vec<BackupError>> {
         println!("Backup started...");
-        //let error_type;
+        let mut errors: Vec<BackupError> = Vec::new();
 
         let mut backup_handles: Vec<(Arc<Mutex<Child>>, &str)> = Vec::new();
 
         for dest in &self.dest_path {
             if dest.0.contains('@') {
-                //error_type = "Ssh";
-                backup_handles.push((Arc::new(Mutex::new(self.ssh_backup(dest)?)), "Ssh"));
+                match self.ssh_backup(dest) {
+                    Ok(child) => {
+                        backup_handles.push((Arc::new(Mutex::new(child)), "Ssh"));
+                    }
+                    Err(err) => {
+                        errors.push(err);
+                        return Err(errors);
+                    }
+                }
             } else {
-                //error_type = "Rsync";
-                backup_handles.push((
-                    Arc::new(Mutex::new(self.local_rsync_backup(dest)?)),
-                    "Rsync",
-                ));
+                match self.local_rsync_backup(dest) {
+                    Ok(child) => {
+                        backup_handles.push((Arc::new(Mutex::new(child)), "Rsync"));
+                    }
+                    Err(err) => {
+                        errors.push(err);
+                        return Err(errors);
+                    }
+                }
             };
         }
 
@@ -214,9 +218,7 @@ impl DockerBackup {
                 let mut buffer = Vec::new();
 
                 if let Ok(status) = handle.0.lock().unwrap().wait() {
-                    println!("lock acquired");
                     if status.success() {
-                        //send
                         thread::sleep(std::time::Duration::from_secs(10));
                         sender_clone
                             .send(Ok(format!("{} backup successful", handle.1)))
@@ -253,7 +255,6 @@ impl DockerBackup {
         }
 
         let mut result_count: usize = 0;
-        let mut errors: Vec<BackupError> = Vec::new();
         loop {
             match self.receiver.as_ref().unwrap().try_recv() {
                 Ok(message) => {
@@ -268,14 +269,18 @@ impl DockerBackup {
                         Err(err) => {
                             if err.message == "Backup interrupted" {
                                 for handle in backup_handles {
-                                    handle.0.lock().unwrap().kill()?;
+                                    if let Err(err) = handle.0.lock().unwrap().kill() {
+                                        eprintln!("Error killing process: {:?}", err);
+                                        errors.push(BackupError::new(err.to_string().as_str()));
+                                    }
                                 }
                                 for join_handle in join_handles {
                                     if let Err(err) = join_handle.join() {
                                         eprintln!("Error joining thread: {:?}", err);
                                     }
                                 }
-                                return Err(err);
+
+                                return Err(errors);
                             }
                             println!("Err result: {}", err.message);
                             errors.push(err);
@@ -290,8 +295,8 @@ impl DockerBackup {
                             }
                         }
 
-                        for error in errors {
-                            error.notify(self);
+                        if !errors.is_empty() {
+                            return Err(errors);
                         }
                         return Ok(());
                     }
