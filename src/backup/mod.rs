@@ -65,7 +65,7 @@ impl DockerBackup {
             .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
             .placeholder(AnsiColor::Yellow.on_default()))
             .arg(clap::Arg::new("dest_path")
-                .help("Accepts multile local or remote ssh destination paths. Destination paths must be separated by ^ and in format [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.")
+                .help("Accepts multiple local or remote ssh destination paths. Destination paths must be separated by ^ and in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.")
                 .required(true)
                 .value_parser(validate_destination_path)
                 .short('d')
