@@ -5,9 +5,10 @@ This is a simple Docker backup tool. It allows you to automatically stop running
 ## Features
 
 - Stop running containers before backup
-- Backup Docker volumes to a local directory or a remote server via SSH
 - Restart containers after backup
-- Send gotify notification about the backup status
+- Specify multiple local or remote ssh destinations and run backups in parallel 
+- Send gotify or discord notifications with backup status
+- Cancel backups early with graceful shutdown
 
 ## Building
 Run the following comand to build the project:
@@ -22,9 +23,11 @@ Binary is going to be available inside `./target/release directory`.
 Usage: dockerbackup [OPTIONS] --destination <dest_path>
 
 Options:
-  -d, --destination <dest_path>        Backup destination path. Accepts local or remote ssh path. Example: /backup or user@host:/backup
+  -d, --destination <dest_path>        Accepts multiple local or remote ssh destination paths. Destination paths must be separated by ^ and in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.
       --volumes <volume_path>          Path to docker volumes directory [default: /var/lib/docker/volumes]
   -e, --exclude <excluded_volumes>...  Volumes to exclude from the backup
+  -g, --gotify <gotify_url>            Gotify server url for notifications
+      --discord <discord_url>          Discord webhook url for notifications
   -h, --help                           Print help
   -V, --version                        Print version
 ```
