@@ -192,7 +192,7 @@ impl DockerBackup {
                     result_count += 1;
                     continue;
                 }
-                match self.ssh_backup(ssh_path_parts, &dest.1) {
+                match self.spawn_ssh_backup(ssh_path_parts, &dest.1) {
                     Ok(child) => {
                         backup_handles.push((Arc::new(Mutex::new(child)), "Ssh"));
                     }
@@ -209,7 +209,7 @@ impl DockerBackup {
                     result_count += 1;
                     continue;
                 }
-                match self.local_rsync_backup(dest_path) {
+                match self.spawn_local_rsync_backup(dest_path) {
                     Ok(child) => {
                         backup_handles.push((Arc::new(Mutex::new(child)), "Rsync"));
                     }
@@ -325,7 +325,7 @@ impl DockerBackup {
             }
         }
     }
-    fn local_rsync_backup(&self, dest_path: &Path) -> Result<Child, BackupError> {
+    fn spawn_local_rsync_backup(&self, dest_path: &Path) -> Result<Child, BackupError> {
         let mut rsync = Command::new("rsync");
 
         exclude_dirs(&mut rsync, &self.excluded_directories);
@@ -339,7 +339,7 @@ impl DockerBackup {
 
         Ok(exec_rsync)
     }
-    fn ssh_backup(
+    fn spawn_ssh_backup(
         &self,
         ssh_path_parts: Vec<&str>,
         target_os: &TargetOs,
