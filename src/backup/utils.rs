@@ -25,11 +25,9 @@ pub fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) {
 }
 
 pub fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<bool, BackupError> {
-    let new_dir = Command::new("mkdir")
-        .arg("-p")
-        .arg(dest_path.join(new_dir))
-        .status()?;
-    Ok(new_dir.success())
+    let dir_path = dest_path.join(new_dir);
+    std::fs::create_dir_all(dir_path)?;
+    Ok(true)
 }
 
 pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), BackupError> {
