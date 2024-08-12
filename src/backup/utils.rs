@@ -24,10 +24,13 @@ pub fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) {
     }
 }
 
-pub fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<bool, BackupError> {
+pub fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<(), BackupError> {
     let dir_path = dest_path.join(new_dir);
+    if dir_path.exists() {
+        return Err(BackupError::new("Directory already exists"));
+    }
     std::fs::create_dir_all(dir_path)?;
-    Ok(true)
+    Ok(())
 }
 
 pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), BackupError> {
