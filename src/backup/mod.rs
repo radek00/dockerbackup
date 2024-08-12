@@ -169,6 +169,7 @@ impl DockerBackup {
                 handle_containers(&running_containers, "start")?;
             }
             for err in errors {
+                println!("Backup error: {}", err.message);
                 err.notify(&self);
             }
         } else if !running_containers.is_empty() {
@@ -278,7 +279,6 @@ impl DockerBackup {
                 Ok(message) => {
                     match message {
                         Ok(result) => {
-                            println!("Ok result");
                             self.notify(Some(result)).unwrap_or_else(|err| {
                                 eprintln!("Error sending notification: {}", err);
                             });
@@ -300,7 +300,6 @@ impl DockerBackup {
                                 errors.push(BackupError::new("Backup interrupted"));
                                 return Err(errors);
                             }
-                            println!("Err result: {}", err.message);
                             errors.push(err);
                             result_count += 1;
                         }
