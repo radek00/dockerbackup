@@ -239,7 +239,6 @@ impl DockerBackup {
 
                 if let Ok(status) = handle.0.lock().unwrap().wait() {
                     if status.success() {
-                        thread::sleep(std::time::Duration::from_secs(10));
                         sender_clone
                             .send(Ok(format!("{} backup successful", handle.1)))
                             .expect("Could not send signal through channel");
