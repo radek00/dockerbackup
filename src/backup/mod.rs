@@ -148,7 +148,7 @@ impl DockerBackup {
                 println!("Backup interrputed, press Ctrl+C again to force exit");
                 sender_clone
                     .send(Err(BackupError::new("Backup interrupted")))
-                    .expect("Could not send signal through channel");
+                    .unwrap();
                 call_count += 1;
             } else {
                 println!("Forcing exit...");
@@ -241,14 +241,14 @@ impl DockerBackup {
                     if status.success() {
                         sender_clone
                             .send(Ok(format!("{} backup successful", handle.1)))
-                            .expect("Could not send signal through channel");
+                            .unwrap();
                     } else if let Some(reader) = stderr_reader.as_mut() {
                         match reader.read_to_end(&mut buffer) {
                             Ok(_) => {
                                 let stderr_output = String::from_utf8_lossy(&buffer);
                                 sender_clone
                                     .send(Err(BackupError::new(&stderr_output)))
-                                    .expect("Could not send signal through channel");
+                                    .unwrap();
                                 return;
                             }
                             Err(e) => {
@@ -258,14 +258,14 @@ impl DockerBackup {
                                         "{} backup error",
                                         handle.1
                                     ))))
-                                    .expect("Could not send signal through channel");
+                                    .unwrap();
                                 return;
                             }
                         }
                     } else {
                         sender_clone
                             .send(Err(BackupError::new(&format!("{} backup error", handle.1))))
-                            .expect("Could not send signal through channel");
+                            .unwrap();
                         return;
                     }
                 }
