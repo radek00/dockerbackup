@@ -178,32 +178,52 @@ impl DockerBackup {
     }
     fn run(&self) -> Result<(), Vec<BackupError>> {
         println!("Backup started...");
+        let mut result_count: usize = 0;
         let mut errors: Vec<BackupError> = Vec::new();
 
         let mut backup_handles: Vec<(Arc<Mutex<Child>>, &str)> = Vec::new();
 
         for dest in &self.dest_path {
             if dest.0.contains('@') {
-                match self.ssh_backup(dest) {
+                let ssh_path_parts: Vec<&str> = dest.0.splitn(2, ':').collect();
+
+                if ssh_path_parts.len() != 2 {
+                    errors.push(BackupError::new("Invalid ssh path"));
+                    result_count += 1;
+                    continue;
+                }
+                match self.ssh_backup(ssh_path_parts, &dest.1) {
                     Ok(child) => {
                         backup_handles.push((Arc::new(Mutex::new(child)), "Ssh"));
                     }
                     Err(err) => {
                         errors.push(err);
-                        return Err(errors);
+                        result_count += 1;
+                        continue;
                     }
                 }
             } else {
-                match self.local_rsync_backup(dest) {
+                let dest_path = Path::new(&dest.0);
+                if let Err(err) = create_new_dir(dest_path, &self.new_dir) {
+                    errors.push(err);
+                    result_count += 1;
+                    continue;
+                }
+                match self.local_rsync_backup(dest_path) {
                     Ok(child) => {
                         backup_handles.push((Arc::new(Mutex::new(child)), "Rsync"));
                     }
                     Err(err) => {
                         errors.push(err);
-                        return Err(errors);
+                        result_count += 1;
+                        continue;
                     }
                 }
             };
+        }
+
+        if result_count == self.dest_path.len() {
+            return Err(errors);
         }
 
         let sender = self.sender.as_ref().unwrap();
@@ -254,7 +274,6 @@ impl DockerBackup {
             join_handles.push(join_handle);
         }
 
-        let mut result_count: usize = 0;
         loop {
             match self.receiver.as_ref().unwrap().try_recv() {
                 Ok(message) => {
@@ -307,12 +326,7 @@ impl DockerBackup {
             }
         }
     }
-    fn local_rsync_backup(&self, dest_path: &(String, TargetOs)) -> Result<Child, BackupError> {
-        let dest_path = Path::new(&dest_path.0);
-        if !create_new_dir(dest_path, &self.new_dir)? {
-            return Err(BackupError::new("Error creating new directory"));
-        }
-
+    fn local_rsync_backup(&self, dest_path: &Path) -> Result<Child, BackupError> {
         let mut rsync = Command::new("rsync");
 
         exclude_dirs(&mut rsync, &self.excluded_directories);
@@ -326,7 +340,11 @@ impl DockerBackup {
 
         Ok(exec_rsync)
     }
-    fn ssh_backup(&self, dest_path: &(String, TargetOs)) -> Result<Child, BackupError> {
+    fn ssh_backup(
+        &self,
+        ssh_path_parts: Vec<&str>,
+        target_os: &TargetOs,
+    ) -> Result<Child, BackupError> {
         let mut tar_volumes = Command::new("tar");
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
@@ -335,13 +353,7 @@ impl DockerBackup {
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
-        let ssh_path_parts: Vec<&str> = dest_path.0.splitn(2, ':').collect();
-
-        if ssh_path_parts.len() != 2 {
-            return Err(BackupError::new("Invalid ssh path"));
-        }
-
-        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, &dest_path.1);
+        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, target_os);
 
         let ssh = Command::new("ssh")
             .arg(ssh_path_parts[0])
