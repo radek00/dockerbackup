@@ -1,8 +1,7 @@
-use backup_error::BackupError;
+use backup_error::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
-use notification::{send_notification, Discord, Gotify};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
@@ -117,25 +116,6 @@ impl DockerBackup {
             sender: None,
         }
     }
-    fn notify(&self, message: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(gotify_url) = &self.gotify_url {
-            send_notification::<Gotify>(Gotify {
-                message: message.clone(),
-                success: true,
-                url: gotify_url,
-            })?;
-        }
-
-        if let Some(dc_url) = &self.discord_url {
-            send_notification::<Discord>(Discord {
-                message,
-                success: true,
-                url: dc_url,
-            })?;
-        }
-
-        Ok(())
-    }
     pub fn backup(mut self) -> Result<(), BackupError> {
         check_docker()?;
         let containers = check_running_containers()?;
@@ -168,23 +148,27 @@ impl DockerBackup {
             handle_containers(&running_containers, "stop")?;
         }
 
-        if let Err(errors) = self.run() {
-            if !running_containers.is_empty() {
-                handle_containers(&running_containers, "start")?;
-            }
-            for err in errors {
-                println!("Backup error: {}", err.message);
-                err.notify(&self);
-            }
-        } else if !running_containers.is_empty() {
+        let results = self.run();
+
+        if !running_containers.is_empty() {
             handle_containers(&running_containers, "start")?;
+        }
+
+        for result in results {
+            match result {
+                Ok(success) => {
+                    success.notify(&self);
+                }
+                Err(err) => {
+                    err.notify(&self);
+                }
+            }
         }
         Ok(())
     }
-    fn run(&self) -> Result<(), Vec<BackupError>> {
+    fn run(&self) -> Vec<Result<BackupSuccess, BackupError>> {
         println!("Backup started...");
-        let mut result_count: usize = 0;
-        let mut errors: Vec<BackupError> = Vec::new();
+        let mut results: Vec<Result<BackupSuccess, BackupError>> = Vec::new();
 
         let mut backup_handles: Vec<(Arc<Mutex<Child>>, &str)> = Vec::new();
 
@@ -193,25 +177,22 @@ impl DockerBackup {
                 let ssh_path_parts: Vec<&str> = dest.0.splitn(2, ':').collect();
 
                 if ssh_path_parts.len() != 2 {
-                    errors.push(BackupError::new("Invalid ssh path"));
-                    result_count += 1;
+                    results.push(Err(BackupError::new("Invalid ssh path")));
                     continue;
                 }
+
                 match self.spawn_ssh_backup(ssh_path_parts, &dest.1) {
                     Ok(child) => {
                         backup_handles.push((Arc::new(Mutex::new(child)), "Ssh"));
                     }
                     Err(err) => {
-                        errors.push(err);
-                        result_count += 1;
-                        continue;
+                        results.push(Err(err));
                     }
                 }
             } else {
                 let dest_path = Path::new(&dest.0);
                 if let Err(err) = create_new_dir(dest_path, &self.new_dir) {
-                    errors.push(err);
-                    result_count += 1;
+                    results.push(Err(err));
                     continue;
                 }
                 match self.spawn_local_rsync_backup(dest_path) {
@@ -219,16 +200,14 @@ impl DockerBackup {
                         backup_handles.push((Arc::new(Mutex::new(child)), "Rsync"));
                     }
                     Err(err) => {
-                        errors.push(err);
-                        result_count += 1;
-                        continue;
+                        results.push(Err(err));
                     }
                 }
             };
         }
 
-        if result_count == self.dest_paths.len() {
-            return Err(errors);
+        if results.len() == self.dest_paths.len() {
+            return results;
         }
 
         let sender = self.sender.as_ref().unwrap();
@@ -283,17 +262,15 @@ impl DockerBackup {
                 Ok(message) => {
                     match message {
                         Ok(result) => {
-                            self.notify(Some(result)).unwrap_or_else(|err| {
-                                eprintln!("Error sending notification: {}", err);
-                            });
-                            result_count += 1;
+                            results.push(Ok(BackupSuccess::new(&result)));
                         }
                         Err(err) => {
                             if err.message == "Backup interrupted" {
                                 for handle in backup_handles {
                                     if let Err(err) = handle.0.lock().unwrap().kill() {
                                         eprintln!("Error killing process: {:?}", err);
-                                        errors.push(BackupError::new(err.to_string().as_str()));
+                                        results
+                                            .push(Err(BackupError::new(err.to_string().as_str())));
                                     }
                                 }
                                 for join_handle in join_handles {
@@ -301,14 +278,13 @@ impl DockerBackup {
                                         eprintln!("Error joining thread: {:?}", err);
                                     }
                                 }
-                                errors.push(BackupError::new("Backup interrupted"));
-                                return Err(errors);
+                                results.push(Err(BackupError::new("Backup interrupted")));
+                                return results;
                             }
-                            errors.push(err);
-                            result_count += 1;
+                            results.push(Err(err));
                         }
                     }
-                    if result_count == self.dest_paths.len() {
+                    if results.len() == self.dest_paths.len() {
                         println!("Backup finished");
                         for join_handle in join_handles {
                             if let Err(err) = join_handle.join() {
@@ -316,10 +292,7 @@ impl DockerBackup {
                             }
                         }
 
-                        if !errors.is_empty() {
-                            return Err(errors);
-                        }
-                        return Ok(());
+                        return results;
                     }
                 }
                 Err(_) => {

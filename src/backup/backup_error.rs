@@ -74,3 +74,38 @@ impl Default for BackupError {
         }
     }
 }
+
+pub struct BackupSuccess {
+    message: String,
+}
+
+impl BackupSuccess {
+    pub fn new(message: &str) -> Self {
+        BackupSuccess {
+            message: message.to_string(),
+        }
+    }
+    pub fn notify(&self, config: &DockerBackup) {
+        if let Some(gotify_url) = &config.gotify_url {
+            send_notification::<Gotify>(Gotify {
+                message: Some(self.message.clone()),
+                success: true,
+                url: gotify_url,
+            })
+            .unwrap_or_else(|e| {
+                eprintln!("Error sending gotify notification: {}", e);
+            });
+        }
+
+        if let Some(dc_url) = &config.discord_url {
+            send_notification::<Discord>(Discord {
+                message: Some(self.message.clone()),
+                success: true,
+                url: dc_url,
+            })
+            .unwrap_or_else(|e| {
+                eprintln!("Error sending discord notification: {}", e);
+            });
+        }
+    }
+}
