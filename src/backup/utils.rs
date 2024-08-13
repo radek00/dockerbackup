@@ -1,6 +1,6 @@
 use std::{path::Path, process::Command};
 
-use super::{backup_error::BackupError, TargetOs};
+use super::{backup_result::BackupError, TargetOs};
 
 pub fn check_docker() -> Result<(), BackupError> {
     let status = Command::new("docker").arg("--version").status()?;
