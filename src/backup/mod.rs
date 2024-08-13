@@ -145,12 +145,14 @@ impl DockerBackup {
         self.sender = Some(sender);
 
         if !running_containers.is_empty() {
+            println!("Stopping containers...");
             handle_containers(&running_containers, "stop")?;
         }
 
         let results = self.run();
 
         if !running_containers.is_empty() {
+            println!("Starting containers...");
             handle_containers(&running_containers, "start")?;
         }
 
