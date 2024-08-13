@@ -23,7 +23,7 @@ Binary is going to be available inside `./target/release directory`.
 Usage: dockerbackup [OPTIONS] --destination <dest_path>
 
 Options:
-  -d, --destination <dest_path>        Accepts multiple local or remote ssh destination paths. Destination paths must be separated by ^ and in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.
+  -d, --destination <dest_path>        Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.
       --volumes <volume_path>          Path to docker volumes directory [default: /var/lib/docker/volumes]
   -e, --exclude <excluded_volumes>...  Volumes to exclude from the backup
   -g, --gotify <gotify_url>            Gotify server url for notifications
