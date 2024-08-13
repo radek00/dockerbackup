@@ -1,4 +1,4 @@
-use backup_error::{BackupError, BackupSuccess};
+use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
@@ -13,7 +13,7 @@ use utils::{
     validate_destination_path,
 };
 
-mod backup_error;
+mod backup_result;
 mod notification;
 mod utils;
 
