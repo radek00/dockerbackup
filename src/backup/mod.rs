@@ -1,6 +1,7 @@
 use backup_error::BackupError;
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
+use clap::ArgAction;
 use notification::{send_notification, Discord, Gotify};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -41,7 +42,7 @@ impl TargetOs {
 }
 
 pub struct DockerBackup {
-    pub dest_path: Vec<(String, TargetOs)>,
+    dest_paths: Vec<(String, TargetOs)>,
     new_dir: String,
     volume_path: PathBuf,
     excluded_directories: Vec<String>,
@@ -67,6 +68,8 @@ impl DockerBackup {
             .arg(clap::Arg::new("dest_path")
                 .help("Accepts multiple local or remote ssh destination paths. Destination paths must be separated by ^ and in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.")
                 .required(true)
+                .num_args(1..)
+                .action(ArgAction::Append)
                 .value_parser(validate_destination_path)
                 .short('d')
             .long("destination"))
@@ -101,9 +104,10 @@ impl DockerBackup {
         excluded_directories.push(String::from("backingFsBlockDev"));
 
         DockerBackup {
-            dest_path: matches
-                .remove_one::<Vec<(String, TargetOs)>>("dest_path")
-                .unwrap(),
+            dest_paths: matches
+                .remove_many::<(String, TargetOs)>("dest_path")
+                .unwrap()
+                .collect(),
             new_dir,
             volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
             excluded_directories,
@@ -184,7 +188,7 @@ impl DockerBackup {
 
         let mut backup_handles: Vec<(Arc<Mutex<Child>>, &str)> = Vec::new();
 
-        for dest in &self.dest_path {
+        for dest in &self.dest_paths {
             if dest.0.contains('@') {
                 let ssh_path_parts: Vec<&str> = dest.0.splitn(2, ':').collect();
 
@@ -223,7 +227,7 @@ impl DockerBackup {
             };
         }
 
-        if result_count == self.dest_path.len() {
+        if result_count == self.dest_paths.len() {
             return Err(errors);
         }
 
@@ -304,7 +308,7 @@ impl DockerBackup {
                             result_count += 1;
                         }
                     }
-                    if result_count == self.dest_path.len() {
+                    if result_count == self.dest_paths.len() {
                         println!("Backup finished");
                         for join_handle in join_handles {
                             if let Err(err) = join_handle.join() {
