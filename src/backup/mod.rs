@@ -10,7 +10,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
-    parse_excluded_containers, validate_destination_path,
+    parse_excluded_containers, parse_destination_path,
 };
 
 mod backup_result;
@@ -69,7 +69,7 @@ impl DockerBackup {
                 .required(true)
                 .num_args(1..)
                 .action(ArgAction::Append)
-                .value_parser(validate_destination_path)
+                .value_parser(parse_destination_path)
                 .short('d')
             .long("destination"))
             .arg(clap::Arg::new("volume_path")

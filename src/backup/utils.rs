@@ -44,7 +44,7 @@ pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), Ba
     Err(BackupError::new("Error handling containers"))
 }
 
-pub fn validate_destination_path(path: &str) -> Result<(String, TargetOs), String> {
+pub fn parse_destination_path(path: &str) -> Result<(String, TargetOs), String> {
     if path.contains('@') {
         let tuple: Vec<&str> = path.splitn(2, ',').collect();
         if tuple.len() != 2 {
