@@ -67,3 +67,17 @@ pub fn validate_destination_path(path: &str) -> Result<(String, TargetOs), Strin
         Err(String::from("Local path does not exist"))
     }
 }
+
+pub fn parse_excluded_containers(val: &str) -> Result<Vec<(String, Option<String>)>, String> {
+    let mut excluded_containers: Vec<(String, Option<String>)> = Vec::new();
+    for container in val.split(',') {
+        let parts: Vec<&str> = container.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            excluded_containers.push((parts[0].to_owned(), Some(parts[1].to_owned())));
+        } else {
+            excluded_containers.push((parts[0].to_owned(), None));
+        }
+    }
+    println!("{:?}", excluded_containers);
+    return Ok(excluded_containers);
+}
