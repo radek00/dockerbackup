@@ -264,6 +264,7 @@ impl DockerBackup {
                 Ok(message) => {
                     match message {
                         Ok(result) => {
+                            println!("{}", result);
                             results.push(Ok(BackupSuccess::new(&result)));
                         }
                         Err(err) => {
