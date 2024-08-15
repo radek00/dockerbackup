@@ -10,7 +10,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
-    validate_destination_path,
+    parse_excluded_containers, validate_destination_path,
 };
 
 mod backup_result;
@@ -44,7 +44,7 @@ pub struct DockerBackup {
     dest_paths: Vec<(String, TargetOs)>,
     new_dir: String,
     volume_path: PathBuf,
-    excluded_directories: Vec<String>,
+    excluded_containers: Vec<(String, Option<String>)>,
     gotify_url: Option<String>,
     discord_url: Option<String>,
     receiver: Option<Receiver<Result<String, BackupError>>>,
@@ -78,12 +78,12 @@ impl DockerBackup {
                 .default_value("/var/lib/docker/volumes")
                 .required(false)
                 .long("volumes"))
-            .arg(clap::Arg::new("excluded_volumes")
-                .help("Volumes to exclude from the backup")
+            .arg(clap::Arg::new("excluded_containers")
+                .help("Containers and matching volumes to exclude from the backup. Excluded volumes must be specified in the following format: [container_name:volume_name] where volume name is optional.")
                 .required(false)
                 .short('e')
                 .long("exclude")
-                .num_args(1..))
+                .value_parser(parse_excluded_containers))
             .arg(clap::Arg::new("gotify_url")
                 .help("Gotify server url for notifications")
                 .required(false)
@@ -95,12 +95,15 @@ impl DockerBackup {
                 .long("discord"))
             .get_matches();
 
-        let mut excluded_directories = match matches.remove_many::<String>("excluded_volumes") {
-            Some(dirs) => dirs.collect(),
-            None => vec![],
-        };
+        let mut excluded_containers =
+            match matches.remove_one::<Vec<(String, Option<String>)>>("excluded_containers") {
+                Some(excluded_containers) => excluded_containers,
+                None => Vec::new(),
+            };
 
-        excluded_directories.push(String::from("backingFsBlockDev"));
+        println!("{:?}", excluded_containers);
+
+        excluded_containers.push((String::new(), Some(String::from("backingFsBlockDev"))));
 
         DockerBackup {
             dest_paths: matches
@@ -109,7 +112,7 @@ impl DockerBackup {
                 .collect(),
             new_dir,
             volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
-            excluded_directories,
+            excluded_containers,
             gotify_url: matches.remove_one::<String>("gotify_url"),
             discord_url: matches.remove_one::<String>("discord_url"),
             receiver: None,
@@ -307,7 +310,7 @@ impl DockerBackup {
     fn spawn_local_rsync_backup(&self, dest_path: &Path) -> Result<Child, BackupError> {
         let mut rsync = Command::new("rsync");
 
-        exclude_dirs(&mut rsync, &self.excluded_directories);
+        //exclude_dirs(&mut rsync, &self.excluded_containers);
 
         let exec_rsync = rsync
             .arg("-az")
@@ -327,7 +330,7 @@ impl DockerBackup {
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
 
-        exclude_dirs(&mut tar_volumes, &self.excluded_directories);
+        //exclude_dirs(&mut tar_volumes, &self.excluded_containers);
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
