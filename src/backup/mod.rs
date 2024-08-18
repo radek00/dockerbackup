@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::{fs, thread};
 use utils::{
-    check_docker, check_running_containers, create_new_dir, exclude_dirs, handle_containers,
-    parse_excluded_containers, parse_destination_path,
+    check_docker, check_running_containers, create_new_dir, exclude_volumes, get_container_name,
+    handle_containers, parse_destination_path, parse_excluded_containers,
 };
 
 mod backup_result;
@@ -95,7 +95,7 @@ impl DockerBackup {
                 .long("discord"))
             .get_matches();
 
-        let mut excluded_containers =
+        let excluded_containers =
             match matches.remove_one::<Vec<(String, Option<String>)>>("excluded_containers") {
                 Some(excluded_containers) => excluded_containers,
                 None => Vec::new(),
@@ -103,7 +103,7 @@ impl DockerBackup {
 
         println!("{:?}", excluded_containers);
 
-        excluded_containers.push((String::new(), Some(String::from("backingFsBlockDev"))));
+        //excluded_containers.push((String::new(), Some(String::from("backingFsBlockDev"))));
 
         DockerBackup {
             dest_paths: matches
@@ -122,8 +122,27 @@ impl DockerBackup {
     pub fn backup(mut self) -> Result<(), BackupError> {
         check_docker()?;
         let containers = check_running_containers()?;
+        println!("{}", containers);
         let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
         running_containers.retain(|&x| !x.is_empty());
+
+        let mut volumes = fs::read_dir(&self.volume_path)
+            .unwrap()
+            .map(|x| x.unwrap().file_name().to_str().unwrap().to_string());
+        for excluded_tuple in &self.excluded_containers {
+            let container = &excluded_tuple.0;
+            if let Some(volume) = &excluded_tuple.1 {
+                if !volumes.any(|x| x.ends_with(volume.as_str())) {
+                    return Err(BackupError::new("Excluded volume does not exist"));
+                }
+            }
+
+            //container_map.remove(container.as_str()).unwrap();
+            running_containers.retain(|&x| &get_container_name(x).unwrap() != container);
+        }
+
+        println!("{:?}", running_containers);
+        //println!("{:?}", container_map);
 
         let (sender, receiver): BackupChannel = mpsc::channel();
         let mut call_count = 0;
@@ -310,7 +329,7 @@ impl DockerBackup {
     fn spawn_local_rsync_backup(&self, dest_path: &Path) -> Result<Child, BackupError> {
         let mut rsync = Command::new("rsync");
 
-        //exclude_dirs(&mut rsync, &self.excluded_containers);
+        exclude_volumes(&mut rsync, &self.excluded_containers);
 
         let exec_rsync = rsync
             .arg("-az")
@@ -330,7 +349,7 @@ impl DockerBackup {
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
 
-        //exclude_dirs(&mut tar_volumes, &self.excluded_containers);
+        exclude_volumes(&mut tar_volumes, &self.excluded_containers);
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
