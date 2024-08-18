@@ -12,15 +12,17 @@ pub fn check_docker() -> Result<(), BackupError> {
 
 pub fn check_running_containers() -> Result<String, BackupError> {
     let running_containers = Command::new("docker")
-        .args(["container", "ls", "-q"])
+        .args(["ps", "--format", "{{.Names}}"])
         .output()?;
     let containers_list = String::from_utf8(running_containers.stdout)?;
     Ok(containers_list)
 }
 
-pub fn exclude_dirs(command: &mut Command, dirs_to_exclude: &Vec<String>) {
+pub fn exclude_volumes(command: &mut Command, dirs_to_exclude: &Vec<(String, Option<String>)>) {
     for dir in dirs_to_exclude {
-        command.arg(format!("--exclude={}", dir));
+        if let Some(volume) = &dir.1 {
+            command.arg(format!("--exclude={}", volume));
+        }
     }
 }
 
@@ -80,4 +82,18 @@ pub fn parse_excluded_containers(val: &str) -> Result<Vec<(String, Option<String
     }
     println!("{:?}", excluded_containers);
     return Ok(excluded_containers);
+}
+
+pub fn get_container_name(container_name: &str) -> Result<String, BackupError> {
+    let output = Command::new("docker")
+        .args(&["inspect", "--format", "{{.Name}}", container_name])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(BackupError::new("Failed to get container name"));
+    }
+
+    let mut name = String::from_utf8(output.stdout)?.trim().to_string();
+    name.remove(0);
+    Ok(name)
 }
