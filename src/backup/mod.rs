@@ -106,10 +106,12 @@ impl DockerBackup {
             Some(excluded_containers) => excluded_containers.collect(),
             None => Vec::new(),
         };
-        let excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
+        let mut excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
             Some(excluded_volumes) => excluded_volumes.collect(),
             None => Vec::new(),
         };
+
+        excluded_volumes.push("backingFsBlockDev".to_string());
 
         DockerBackup {
             dest_paths: matches
