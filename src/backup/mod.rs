@@ -111,11 +111,6 @@ impl DockerBackup {
             None => Vec::new(),
         };
 
-        println!("{:?}", excluded_containers);
-        println!("{:?}", excluded_volumes);
-
-        //excluded_containers.push((String::new(), Some(String::from("backingFsBlockDev"))));
-
         DockerBackup {
             dest_paths: matches
                 .remove_many::<(String, TargetOs)>("dest_path")
@@ -133,7 +128,6 @@ impl DockerBackup {
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
         let containers = check_running_containers()?;
-        println!("{}", containers);
         let mut running_containers: HashSet<&str> =
             containers.trim().split('\n').collect::<HashSet<&str>>();
         running_containers.retain(|&x| !x.is_empty());
@@ -141,9 +135,6 @@ impl DockerBackup {
         for container in &self.excluded_containers {
             running_containers.remove(container.as_str());
         }
-
-        println!("{:?}", running_containers);
-        //println!("{:?}", container_map);
 
         let (sender, receiver): BackupChannel = mpsc::channel();
         let mut call_count = 0;
@@ -185,6 +176,7 @@ impl DockerBackup {
                     success.notify(&self);
                 }
                 Err(err) => {
+                    println!("{}", err.message);
                     err.notify(&self);
                 }
             }
@@ -291,6 +283,7 @@ impl DockerBackup {
                             results.push(Ok(BackupSuccess::new(&result)));
                         }
                         Err(err) => {
+                            println!("{}", err.message);
                             if err.message == "Backup interrupted" {
                                 for handle in backup_handles {
                                     if let Err(err) = handle.0.lock().unwrap().kill() {
