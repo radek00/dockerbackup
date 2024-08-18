@@ -62,7 +62,7 @@ impl DockerBackup {
         let mut matches = clap::Command::new("Docker Backup")
             .version(env!("CARGO_PKG_VERSION"))
             .author("radek00")
-            .about("Simple docker backup tool to perform backups to local destination or remote ssh server")
+            .about("CLI tool for backing up docker volumes")
             .styles(Styles::styled()
             .header(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
             .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
