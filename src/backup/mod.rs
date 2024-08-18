@@ -2,15 +2,16 @@ use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
+use std::collections::HashSet;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
-use std::{fs, thread};
+use std::thread;
 use utils::{
-    check_docker, check_running_containers, create_new_dir, exclude_volumes, get_container_name,
-    handle_containers, parse_destination_path, parse_excluded_containers,
+    check_docker, check_running_containers, create_new_dir, exclude_volumes, handle_containers,
+    parse_destination_path,
 };
 
 mod backup_result;
@@ -44,7 +45,8 @@ pub struct DockerBackup {
     dest_paths: Vec<(String, TargetOs)>,
     new_dir: String,
     volume_path: PathBuf,
-    excluded_containers: Vec<(String, Option<String>)>,
+    excluded_containers: Vec<String>,
+    excluded_volumes: Vec<String>,
     gotify_url: Option<String>,
     discord_url: Option<String>,
     receiver: Option<Receiver<Result<String, BackupError>>>,
@@ -53,6 +55,7 @@ pub struct DockerBackup {
 
 impl DockerBackup {
     pub fn build() -> DockerBackup {
+        check_docker().expect("Can't continue without Docker installed");
         let date = chrono::Local::now();
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
 
@@ -79,11 +82,15 @@ impl DockerBackup {
                 .required(false)
                 .long("volumes"))
             .arg(clap::Arg::new("excluded_containers")
-                .help("Containers and matching volumes to exclude from the backup. Excluded volumes must be specified in the following format: [container_name:volume_name] where volume name is optional.")
+                .help("Containers to exclude from backup")
                 .required(false)
-                .short('e')
-                .long("exclude")
-                .value_parser(parse_excluded_containers))
+                .long("exclude-containers")
+                .num_args(1..))
+            .arg(clap::Arg::new("excluded_volumes")
+                .help("Volumes to exclude from backup")
+                .required(false)
+                .long("exclude-volumes")
+                .num_args(1..))
             .arg(clap::Arg::new("gotify_url")
                 .help("Gotify server url for notifications")
                 .required(false)
@@ -95,13 +102,17 @@ impl DockerBackup {
                 .long("discord"))
             .get_matches();
 
-        let excluded_containers =
-            match matches.remove_one::<Vec<(String, Option<String>)>>("excluded_containers") {
-                Some(excluded_containers) => excluded_containers,
-                None => Vec::new(),
-            };
+        let excluded_containers = match matches.remove_many::<String>("excluded_containers") {
+            Some(excluded_containers) => excluded_containers.collect(),
+            None => Vec::new(),
+        };
+        let excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
+            Some(excluded_volumes) => excluded_volumes.collect(),
+            None => Vec::new(),
+        };
 
         println!("{:?}", excluded_containers);
+        println!("{:?}", excluded_volumes);
 
         //excluded_containers.push((String::new(), Some(String::from("backingFsBlockDev"))));
 
@@ -113,6 +124,7 @@ impl DockerBackup {
             new_dir,
             volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
             excluded_containers,
+            excluded_volumes,
             gotify_url: matches.remove_one::<String>("gotify_url"),
             discord_url: matches.remove_one::<String>("discord_url"),
             receiver: None,
@@ -120,25 +132,14 @@ impl DockerBackup {
         }
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
-        check_docker()?;
         let containers = check_running_containers()?;
         println!("{}", containers);
-        let mut running_containers: Vec<&str> = containers.trim().split('\n').collect();
+        let mut running_containers: HashSet<&str> =
+            containers.trim().split('\n').collect::<HashSet<&str>>();
         running_containers.retain(|&x| !x.is_empty());
 
-        let mut volumes = fs::read_dir(&self.volume_path)
-            .unwrap()
-            .map(|x| x.unwrap().file_name().to_str().unwrap().to_string());
-        for excluded_tuple in &self.excluded_containers {
-            let container = &excluded_tuple.0;
-            if let Some(volume) = &excluded_tuple.1 {
-                if !volumes.any(|x| x.ends_with(volume.as_str())) {
-                    return Err(BackupError::new("Excluded volume does not exist"));
-                }
-            }
-
-            //container_map.remove(container.as_str()).unwrap();
-            running_containers.retain(|&x| &get_container_name(x).unwrap() != container);
+        for container in &self.excluded_containers {
+            running_containers.remove(container.as_str());
         }
 
         println!("{:?}", running_containers);
@@ -329,7 +330,7 @@ impl DockerBackup {
     fn spawn_local_rsync_backup(&self, dest_path: &Path) -> Result<Child, BackupError> {
         let mut rsync = Command::new("rsync");
 
-        exclude_volumes(&mut rsync, &self.excluded_containers);
+        exclude_volumes(&mut rsync, &self.excluded_volumes, &self.volume_path)?;
 
         let exec_rsync = rsync
             .arg("-az")
@@ -349,7 +350,7 @@ impl DockerBackup {
 
         tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
 
-        exclude_volumes(&mut tar_volumes, &self.excluded_containers);
+        exclude_volumes(&mut tar_volumes, &self.excluded_volumes, &self.volume_path)?;
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
