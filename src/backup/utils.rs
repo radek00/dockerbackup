@@ -1,4 +1,9 @@
-use std::{path::Path, process::Command};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use super::{backup_result::BackupError, TargetOs};
 
@@ -18,12 +23,27 @@ pub fn check_running_containers() -> Result<String, BackupError> {
     Ok(containers_list)
 }
 
-pub fn exclude_volumes(command: &mut Command, dirs_to_exclude: &Vec<(String, Option<String>)>) {
-    for dir in dirs_to_exclude {
-        if let Some(volume) = &dir.1 {
-            command.arg(format!("--exclude={}", volume));
+pub fn exclude_volumes(
+    command: &mut Command,
+    dirs_to_exclude: &Vec<String>,
+    volume_path: &PathBuf,
+) -> Result<(), BackupError> {
+    let volumes: HashSet<String> = fs::read_dir(volume_path)
+        .map_err(|e| BackupError::new(&format!("Failed to read volume directory: {}", e)))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().to_str().map(|s| s.to_string()))
+        .collect();
+
+    for volume in dirs_to_exclude {
+        if !volumes.iter().any(|x| x.ends_with(volume)) {
+            return Err(BackupError::new(&format!(
+                "Excluded volume '{}' does not exist",
+                volume
+            )));
         }
+        command.arg(format!("--exclude={}", volume));
     }
+    Ok(())
 }
 
 pub fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<(), BackupError> {
@@ -35,7 +55,7 @@ pub fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<(), BackupEr
     Ok(())
 }
 
-pub fn handle_containers(containers: &Vec<&str>, command: &str) -> Result<(), BackupError> {
+pub fn handle_containers(containers: &HashSet<&str>, command: &str) -> Result<(), BackupError> {
     let cmd_result = Command::new("docker")
         .arg(command)
         .args(containers)
@@ -68,32 +88,4 @@ pub fn parse_destination_path(path: &str) -> Result<(String, TargetOs), String> 
     } else {
         Err(String::from("Local path does not exist"))
     }
-}
-
-pub fn parse_excluded_containers(val: &str) -> Result<Vec<(String, Option<String>)>, String> {
-    let mut excluded_containers: Vec<(String, Option<String>)> = Vec::new();
-    for container in val.split(',') {
-        let parts: Vec<&str> = container.splitn(2, ':').collect();
-        if parts.len() == 2 {
-            excluded_containers.push((parts[0].to_owned(), Some(parts[1].to_owned())));
-        } else {
-            excluded_containers.push((parts[0].to_owned(), None));
-        }
-    }
-    println!("{:?}", excluded_containers);
-    return Ok(excluded_containers);
-}
-
-pub fn get_container_name(container_name: &str) -> Result<String, BackupError> {
-    let output = Command::new("docker")
-        .args(&["inspect", "--format", "{{.Name}}", container_name])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(BackupError::new("Failed to get container name"));
-    }
-
-    let mut name = String::from_utf8(output.stdout)?.trim().to_string();
-    name.remove(0);
-    Ok(name)
 }
