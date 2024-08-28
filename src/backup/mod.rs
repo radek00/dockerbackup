@@ -328,7 +328,7 @@ impl DockerBackup {
         exclude_volumes(&mut rsync, &self.excluded_volumes, &self.volume_path)?;
 
         let exec_rsync = rsync
-            .arg("-az")
+            .arg("-aw")
             .arg(&self.volume_path)
             .arg(dest_path.join(&self.new_dir))
             .stderr(Stdio::piped())
