@@ -19,25 +19,17 @@ pub struct Discord<'a> {
 
 impl<'a> Notification for Gotify<'a> {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut map: HashMap<&str, String> = HashMap::new();
+        let mut map: HashMap<&str, &str> = HashMap::new();
 
         let message = if let Some(msg) = &self.message {
-            format!(
-                "{}\n{}",
-                if self.success {
-                    "Backup successful"
-                } else {
-                    "Backup failed"
-                },
-                msg
-            )
+            msg
         } else if self.success {
-            "Backup successful".to_string()
+            "Backup successful"
         } else {
-            "Backup failed".to_string()
+            "Backup failed"
         };
 
-        map.insert("title", String::from("Backup result"));
+        map.insert("title", "Backup result");
         map.insert("message", message);
         let client = reqwest::blocking::Client::new();
 
