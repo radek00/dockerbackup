@@ -246,7 +246,7 @@ impl DockerBackup {
                     if status.success() {
                         sender_clone
                             .send(Ok(format!(
-                                "{} backup successful. \n Elapsed time: {} minutes",
+                                "{} backup completed successfully in {} minutes",
                                 handle.1,
                                 elapsed_time.elapsed().as_secs() / 60
                             )))
