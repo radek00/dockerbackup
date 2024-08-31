@@ -3,13 +3,13 @@ use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use std::collections::HashSet;
-use std::io::{BufReader, Read};
+use std::io::{stdout, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
 use std::time::Instant;
+use std::{thread, time};
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_volumes, handle_containers,
     parse_destination_path,
@@ -235,6 +235,7 @@ impl DockerBackup {
 
         for handle in &backup_handles {
             let elapsed_time = Instant::now();
+            thread::sleep(time::Duration::from_secs(65));
             let sender_clone = sender.clone();
             let handle = handle.clone();
             let join_handle = thread::spawn(move || {
@@ -242,26 +243,38 @@ impl DockerBackup {
                 let mut stderr_reader = stderr.map(BufReader::new);
                 let mut buffer = Vec::new();
 
-                if let Ok(status) = handle.0.lock().unwrap().wait() {
-                    if status.success() {
-                        sender_clone
-                            .send(Ok(format!(
-                                "{} backup completed successfully in {} minutes",
-                                handle.1,
-                                elapsed_time.elapsed().as_secs() / 60
-                            )))
-                            .unwrap();
-                    } else if let Some(reader) = stderr_reader.as_mut() {
-                        match reader.read_to_end(&mut buffer) {
-                            Ok(_) => {
-                                let stderr_output = String::from_utf8_lossy(&buffer);
+                loop {
+                    if let Ok(status) = handle.0.lock().unwrap().try_wait() {
+                        if let Some(status) = status {
+                            if status.success() {
                                 sender_clone
-                                    .send(Err(BackupError::new(&stderr_output)))
+                                    .send(Ok(format!(
+                                        "{} backup completed successfully in {} minutes",
+                                        handle.1,
+                                        elapsed_time.elapsed().as_secs() / 60
+                                    )))
                                     .unwrap();
-                                return;
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to read stderr: {}", e);
+                            } else if let Some(reader) = stderr_reader.as_mut() {
+                                match reader.read_to_end(&mut buffer) {
+                                    Ok(_) => {
+                                        let stderr_output = String::from_utf8_lossy(&buffer);
+                                        sender_clone
+                                            .send(Err(BackupError::new(&stderr_output)))
+                                            .unwrap();
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to read stderr: {}", e);
+                                        sender_clone
+                                            .send(Err(BackupError::new(&format!(
+                                                "{} backup error",
+                                                handle.1
+                                            ))))
+                                            .unwrap();
+                                        return;
+                                    }
+                                }
+                            } else {
                                 sender_clone
                                     .send(Err(BackupError::new(&format!(
                                         "{} backup error",
@@ -272,10 +285,14 @@ impl DockerBackup {
                             }
                         }
                     } else {
-                        sender_clone
-                            .send(Err(BackupError::new(&format!("{} backup error", handle.1))))
-                            .unwrap();
-                        return;
+                        let elapsed = elapsed_time.elapsed();
+                        print!(
+                            "\rRunning time: {:02}:{:02}:{:02}",
+                            elapsed.as_secs() / 3600,
+                            (elapsed.as_secs() % 3600) / 60,
+                            elapsed.as_secs() % 60
+                        );
+                        stdout().flush().unwrap();
                     }
                 }
             });
