@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Instant;
-use std::{thread, time};
 use utils::{
-    check_docker, check_running_containers, create_new_dir, exclude_volumes, handle_containers,
-    parse_destination_path,
+    check_docker, check_running_containers, create_new_dir, exclude_volumes, get_elapsed_time,
+    handle_containers, parse_destination_path,
 };
 
 mod backup_result;
@@ -237,23 +237,22 @@ impl DockerBackup {
             let sender_clone = sender.clone();
             let handle = handle.clone();
             let join_handle = thread::spawn(move || {
-                let elapsed_time = Instant::now();
+                let timer = Instant::now();
                 let stderr = handle.0.lock().unwrap().stderr.take();
                 let mut stderr_reader = stderr.map(BufReader::new);
                 let mut buffer = Vec::new();
-                println!("starting loop");
                 loop {
                     if let Ok(status) = handle.0.lock().unwrap().try_wait() {
                         if let Some(status) = status {
-                            println!("status collected");
                             if status.success() {
                                 sender_clone
                                     .send(Ok(format!(
-                                        "{} backup completed successfully in {} minutes",
+                                        "{} backup completed successfully in {}.",
                                         handle.1,
-                                        elapsed_time.elapsed().as_secs() / 60
+                                        get_elapsed_time(timer)
                                     )))
                                     .unwrap();
+                                return;
                             } else if let Some(reader) = stderr_reader.as_mut() {
                                 match reader.read_to_end(&mut buffer) {
                                     Ok(_) => {
@@ -283,17 +282,15 @@ impl DockerBackup {
                                     .unwrap();
                                 return;
                             }
-                        }else {
-                            let elapsed = elapsed_time.elapsed();
+                        } else {
                             print!(
-                                "\rRunning time: {:02}:{:02}:{:02}",
-                                elapsed.as_secs() / 3600,
-                                (elapsed.as_secs() % 3600) / 60,
-                                elapsed.as_secs() % 60
+                                "\r{} bsckup running time: {}",
+                                handle.1,
+                                get_elapsed_time(timer)
                             );
                             stdout().flush().unwrap();
                         }
-                    } 
+                    }
                 }
             });
             join_handles.push(join_handle);

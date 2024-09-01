@@ -89,3 +89,13 @@ pub fn parse_destination_path(path: &str) -> Result<(String, TargetOs), String> 
         Err(String::from("Local path does not exist"))
     }
 }
+
+pub fn get_elapsed_time(start: std::time::Instant) -> String {
+    let elapsed = start.elapsed();
+    format!(
+        "{:02}:{:02}:{:02}",
+        elapsed.as_secs() / 3600,
+        elapsed.as_secs() % 3600 / 60,
+        elapsed.as_secs() % 60
+    )
+}
