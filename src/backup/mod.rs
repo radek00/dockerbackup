@@ -234,18 +234,18 @@ impl DockerBackup {
         let mut join_handles: Vec<thread::JoinHandle<()>> = Vec::new();
 
         for handle in &backup_handles {
-            let elapsed_time = Instant::now();
-            thread::sleep(time::Duration::from_secs(65));
             let sender_clone = sender.clone();
             let handle = handle.clone();
             let join_handle = thread::spawn(move || {
+                let elapsed_time = Instant::now();
                 let stderr = handle.0.lock().unwrap().stderr.take();
                 let mut stderr_reader = stderr.map(BufReader::new);
                 let mut buffer = Vec::new();
-
+                println!("starting loop");
                 loop {
                     if let Ok(status) = handle.0.lock().unwrap().try_wait() {
                         if let Some(status) = status {
+                            println!("status collected");
                             if status.success() {
                                 sender_clone
                                     .send(Ok(format!(
@@ -283,17 +283,17 @@ impl DockerBackup {
                                     .unwrap();
                                 return;
                             }
+                        }else {
+                            let elapsed = elapsed_time.elapsed();
+                            print!(
+                                "\rRunning time: {:02}:{:02}:{:02}",
+                                elapsed.as_secs() / 3600,
+                                (elapsed.as_secs() % 3600) / 60,
+                                elapsed.as_secs() % 60
+                            );
+                            stdout().flush().unwrap();
                         }
-                    } else {
-                        let elapsed = elapsed_time.elapsed();
-                        print!(
-                            "\rRunning time: {:02}:{:02}:{:02}",
-                            elapsed.as_secs() / 3600,
-                            (elapsed.as_secs() % 3600) / 60,
-                            elapsed.as_secs() % 60
-                        );
-                        stdout().flush().unwrap();
-                    }
+                    } 
                 }
             });
             join_handles.push(join_handle);
