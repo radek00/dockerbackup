@@ -192,7 +192,7 @@ impl DockerBackup {
         println!("Backup started...");
         let mut results: Vec<Result<BackupSuccess, BackupError>> = Vec::new();
 
-        let mut backup_handles: Vec<(Arc<Mutex<Child>>, &str)> = Vec::new();
+        let mut backup_handles: Vec<(Arc<Mutex<Child>>, String)> = Vec::new();
 
         for dest in &self.dest_paths {
             if dest.0.contains('@') {
@@ -205,7 +205,10 @@ impl DockerBackup {
 
                 match self.spawn_ssh_backup(ssh_path_parts, &dest.1) {
                     Ok(child) => {
-                        backup_handles.push((Arc::new(Mutex::new(child)), "Ssh"));
+                        backup_handles.push((
+                            Arc::new(Mutex::new(child)),
+                            format!("SSH backup to destination {}", dest.0),
+                        ));
                     }
                     Err(err) => {
                         results.push(Err(err));
@@ -219,7 +222,10 @@ impl DockerBackup {
                 }
                 match self.spawn_local_rsync_backup(dest_path) {
                     Ok(child) => {
-                        backup_handles.push((Arc::new(Mutex::new(child)), "Rsync"));
+                        backup_handles.push((
+                            Arc::new(Mutex::new(child)),
+                            format!("Rsync backup to destination {}", dest.0),
+                        ));
                     }
                     Err(err) => {
                         results.push(Err(err));
@@ -249,7 +255,7 @@ impl DockerBackup {
                             if status.success() {
                                 sender_clone
                                     .send(Ok(format!(
-                                        "{} backup completed successfully in {}.",
+                                        "{} completed successfully in {}.",
                                         handle.1,
                                         get_elapsed_time(timer)
                                     )))
@@ -285,11 +291,7 @@ impl DockerBackup {
                                 return;
                             }
                         } else {
-                            print!(
-                                "\r{} bsckup running time: {}",
-                                handle.1,
-                                get_elapsed_time(timer)
-                            );
+                            print!("\r{} running time: {}", handle.1, get_elapsed_time(timer));
                             stdout().flush().unwrap();
                         }
                     }
