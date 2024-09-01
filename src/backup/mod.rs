@@ -12,7 +12,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_volumes, get_elapsed_time,
-    handle_containers, parse_destination_path,
+    handle_containers, hide_cursor, parse_destination_path, show_cursor,
 };
 
 mod backup_result;
@@ -166,7 +166,9 @@ impl DockerBackup {
             handle_containers(&running_containers, "stop")?;
         }
 
+        hide_cursor();
         let results = self.run();
+        show_cursor();
 
         if !running_containers.is_empty() {
             println!("Starting containers...");
@@ -301,6 +303,7 @@ impl DockerBackup {
                 Ok(message) => {
                     match message {
                         Ok(result) => {
+                            println!();
                             println!("{}", result);
                             results.push(Ok(BackupSuccess::new(&result)));
                         }
@@ -326,7 +329,7 @@ impl DockerBackup {
                         }
                     }
                     if results.len() == self.dest_paths.len() {
-                        println!("Backup finished");
+                        println!("All backups finished");
                         for join_handle in join_handles {
                             if let Err(err) = join_handle.join() {
                                 eprintln!("Error joining thread: {:?}", err);

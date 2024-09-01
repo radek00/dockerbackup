@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     fs,
+    io::{stdout, Write},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -98,4 +99,14 @@ pub fn get_elapsed_time(start: std::time::Instant) -> String {
         elapsed.as_secs() % 3600 / 60,
         elapsed.as_secs() % 60
     )
+}
+
+pub fn hide_cursor() {
+    print!("\x1B[?25l");
+    stdout().flush().unwrap();
+}
+
+pub fn show_cursor() {
+    print!("\x1B[?25h");
+    stdout().flush().unwrap();
 }
