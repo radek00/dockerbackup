@@ -3,7 +3,7 @@ use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use std::collections::HashSet;
-use std::io::{BufReader, Read};
+use std::io::{stdout, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
@@ -241,11 +241,11 @@ impl DockerBackup {
         let sender = self.sender.as_ref().unwrap();
         let mut join_handles: Vec<thread::JoinHandle<()>> = Vec::new();
 
+        let stdout_mutex = Arc::new(Mutex::new(stdout()));
         for (idx, handle) in backup_handles.iter().enumerate() {
             let sender_clone = sender.clone();
             let handle = handle.clone();
-            let stdout_mutex = Arc::new(Mutex::new(()));
-            let stdout_mutex_clone1 = Arc::clone(&stdout_mutex);
+            let stdout_mutex_clone = stdout_mutex.clone();
             let join_handle = thread::spawn(move || {
                 let timer = Instant::now();
                 let stderr = handle.0.lock().unwrap().stderr.take();
@@ -293,12 +293,7 @@ impl DockerBackup {
                             }
                         } else {
                             let description = format!("\r{} running time", handle.1);
-                            print_elapsed_time(
-                                idx + 1,
-                                timer,
-                                &description,
-                                stdout_mutex_clone1.clone(),
-                            );
+                            print_elapsed_time(idx + 1, timer, &description, &stdout_mutex_clone);
                             thread::sleep(std::time::Duration::from_secs(1));
                         }
                     }
