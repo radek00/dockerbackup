@@ -2,10 +2,8 @@ use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
-use crossterm::terminal::{self, ClearType};
-use crossterm::ExecutableCommand;
 use std::collections::HashSet;
-use std::io::{stdout, BufReader, Read, Write};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
@@ -258,10 +256,9 @@ impl DockerBackup {
                         if let Some(status) = status {
                             if status.success() {
                                 sender_clone
-                                    .send(Ok(format!(
-                                        "{} completed successfully in {}.",
-                                        handle.1,
-                                        get_elapsed_time(timer)
+                                    .send(Ok(get_elapsed_time(
+                                        timer,
+                                        format!("{} completed successfully in", handle.1).as_str(),
                                     )))
                                     .unwrap();
                                 return;
@@ -298,7 +295,7 @@ impl DockerBackup {
                             let description = format!("\r{} running time", handle.1);
                             print_elapsed_time(
                                 idx + 1,
-                                timer.elapsed(),
+                                timer,
                                 &description,
                                 stdout_mutex_clone1.clone(),
                             );
