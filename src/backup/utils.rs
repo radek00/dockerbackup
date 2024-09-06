@@ -5,13 +5,12 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::Instant,
 };
 
 use crossterm::{
     cursor, execute,
     terminal::{self, ClearType},
-    ExecutableCommand,
 };
 
 use super::{backup_result::BackupError, TargetOs};
@@ -99,10 +98,11 @@ pub fn parse_destination_path(path: &str) -> Result<(String, TargetOs), String> 
     }
 }
 
-pub fn get_elapsed_time(start: std::time::Instant) -> String {
+pub fn get_elapsed_time(start: std::time::Instant, description: &str) -> String {
     let elapsed = start.elapsed();
     format!(
-        "{:02}:{:02}:{:02}",
+        "{}: {:02}:{:02}:{:02}",
+        description,
         elapsed.as_secs() / 3600,
         elapsed.as_secs() % 3600 / 60,
         elapsed.as_secs() % 60
@@ -111,16 +111,13 @@ pub fn get_elapsed_time(start: std::time::Instant) -> String {
 
 pub fn print_elapsed_time(
     timer_id: usize,
-    elapsed: Duration,
+    elapsed: Instant,
     description: &str,
     stdout_mutex: Arc<Mutex<()>>,
 ) {
-    let (cols, rows) = terminal::size().unwrap();
+    let (_cols, rows) = terminal::size().unwrap();
     let _lock = stdout_mutex.lock().unwrap();
     let mut stdout = stdout();
-    let hours = elapsed.as_secs() / 3600;
-    let minutes = (elapsed.as_secs() % 3600) / 60;
-    let seconds = elapsed.as_secs() % 60;
 
     execute!(
         stdout,
@@ -128,12 +125,7 @@ pub fn print_elapsed_time(
         terminal::Clear(ClearType::CurrentLine)
     )
     .unwrap();
-    write!(
-        stdout,
-        "{}: {:02}:{:02}:{:02}",
-        description, hours, minutes, seconds
-    )
-    .unwrap();
+    write!(stdout, "{}", get_elapsed_time(elapsed, description)).unwrap();
     stdout.flush().unwrap();
 }
 
