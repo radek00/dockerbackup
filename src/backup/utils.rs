@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fs,
-    io::{stdout, Write},
+    io::{stdout, Stdout, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
@@ -113,11 +113,10 @@ pub fn print_elapsed_time(
     timer_id: usize,
     elapsed: Instant,
     description: &str,
-    stdout_mutex: Arc<Mutex<()>>,
+    stdout_mutex: &Arc<Mutex<Stdout>>,
 ) {
     let (_cols, rows) = terminal::size().unwrap();
-    let _lock = stdout_mutex.lock().unwrap();
-    let mut stdout = stdout();
+    let mut stdout = stdout_mutex.lock().unwrap();
 
     execute!(
         stdout,
