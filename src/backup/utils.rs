@@ -4,6 +4,14 @@ use std::{
     io::{stdout, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use crossterm::{
+    cursor, execute,
+    terminal::{self, ClearType},
+    ExecutableCommand,
 };
 
 use super::{backup_result::BackupError, TargetOs};
@@ -99,6 +107,34 @@ pub fn get_elapsed_time(start: std::time::Instant) -> String {
         elapsed.as_secs() % 3600 / 60,
         elapsed.as_secs() % 60
     )
+}
+
+pub fn print_elapsed_time(
+    timer_id: usize,
+    elapsed: Duration,
+    description: &str,
+    stdout_mutex: Arc<Mutex<()>>,
+) {
+    let (cols, rows) = terminal::size().unwrap();
+    let _lock = stdout_mutex.lock().unwrap();
+    let mut stdout = stdout();
+    let hours = elapsed.as_secs() / 3600;
+    let minutes = (elapsed.as_secs() % 3600) / 60;
+    let seconds = elapsed.as_secs() % 60;
+
+    execute!(
+        stdout,
+        cursor::MoveTo(0, rows - timer_id as u16),
+        terminal::Clear(ClearType::CurrentLine)
+    )
+    .unwrap();
+    write!(
+        stdout,
+        "{}: {:02}:{:02}:{:02}",
+        description, hours, minutes, seconds
+    )
+    .unwrap();
+    stdout.flush().unwrap();
 }
 
 pub fn hide_cursor() {

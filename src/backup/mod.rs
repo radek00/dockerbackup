@@ -2,6 +2,8 @@ use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
+use crossterm::terminal::{self, ClearType};
+use crossterm::ExecutableCommand;
 use std::collections::HashSet;
 use std::io::{stdout, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +14,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_volumes, get_elapsed_time,
-    handle_containers, hide_cursor, parse_destination_path, show_cursor,
+    handle_containers, hide_cursor, parse_destination_path, print_elapsed_time, show_cursor,
 };
 
 mod backup_result;
@@ -241,9 +243,11 @@ impl DockerBackup {
         let sender = self.sender.as_ref().unwrap();
         let mut join_handles: Vec<thread::JoinHandle<()>> = Vec::new();
 
-        for handle in &backup_handles {
+        for (idx, handle) in backup_handles.iter().enumerate() {
             let sender_clone = sender.clone();
             let handle = handle.clone();
+            let stdout_mutex = Arc::new(Mutex::new(()));
+            let stdout_mutex_clone1 = Arc::clone(&stdout_mutex);
             let join_handle = thread::spawn(move || {
                 let timer = Instant::now();
                 let stderr = handle.0.lock().unwrap().stderr.take();
@@ -291,8 +295,14 @@ impl DockerBackup {
                                 return;
                             }
                         } else {
-                            print!("\r{} running time: {}", handle.1, get_elapsed_time(timer));
-                            stdout().flush().unwrap();
+                            let description = format!("\r{} running time", handle.1);
+                            print_elapsed_time(
+                                idx + 1,
+                                timer.elapsed(),
+                                &description,
+                                stdout_mutex_clone1.clone(),
+                            );
+                            thread::sleep(std::time::Duration::from_secs(1));
                         }
                     }
                 }
