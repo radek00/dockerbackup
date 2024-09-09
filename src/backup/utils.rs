@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fs,
-    io::{stdout, Stdout, Write},
+    io::{Stdout, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
@@ -127,8 +127,8 @@ pub fn print_elapsed_time(timer_id: usize, message: &String, stdout_mutex: &Arc<
     stdout.flush().unwrap();
 }
 
-pub fn reset_cursor_after_timers(active_timers: u16) {
-    let mut stdout = stdout();
+pub fn reset_cursor_after_timers(active_timers: u16, stdout: &Arc<Mutex<Stdout>>) {
+    let mut stdout = stdout.lock().unwrap();
     execute!(
         stdout,
         cursor::MoveDown(active_timers + 1),
@@ -140,8 +140,8 @@ pub fn reset_cursor_after_timers(active_timers: u16) {
     stdout.flush().unwrap();
 }
 
-pub fn clear_terminal() {
-    let mut stdout = stdout();
+pub fn clear_terminal(stdout: &Arc<Mutex<Stdout>>) {
+    let mut stdout = stdout.lock().unwrap();
     execute!(
         stdout,
         terminal::Clear(terminal::ClearType::All),
@@ -152,14 +152,14 @@ pub fn clear_terminal() {
     stdout.flush().unwrap();
 }
 
-pub fn hide_cursor() {
-    let mut stdout = stdout();
+pub fn hide_cursor(stdout: &Arc<Mutex<Stdout>>) {
+    let mut stdout = stdout.lock().unwrap();
     execute!(stdout, Hide).unwrap();
     stdout.flush().unwrap();
 }
 
-pub fn show_cursor() {
-    let mut stdout = stdout();
+pub fn show_cursor(stdout: &Arc<Mutex<Stdout>>) {
+    let mut stdout = stdout.lock().unwrap();
     execute!(stdout, Show).unwrap();
     stdout.flush().unwrap();
 }

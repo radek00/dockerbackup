@@ -3,7 +3,7 @@ use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use std::collections::HashSet;
-use std::io::{stdout, BufReader, Read};
+use std::io::{stdout, BufReader, Read, Stdout};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
@@ -53,6 +53,7 @@ pub struct DockerBackup {
     discord_url: Option<String>,
     receiver: Option<Receiver<Result<String, BackupError>>>,
     sender: Option<Sender<Result<String, BackupError>>>,
+    stdout: Arc<Mutex<Stdout>>,
 }
 
 impl DockerBackup {
@@ -128,10 +129,11 @@ impl DockerBackup {
             discord_url: matches.remove_one::<String>("discord_url"),
             receiver: None,
             sender: None,
+            stdout: Arc::new(Mutex::new(stdout())),
         }
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
-        clear_terminal();
+        clear_terminal(&self.stdout);
         let containers = check_running_containers()?;
         let mut running_containers: HashSet<&str> =
             containers.trim().split('\n').collect::<HashSet<&str>>();
@@ -145,9 +147,10 @@ impl DockerBackup {
         let mut call_count = 0;
 
         let sender_clone = sender.clone();
+        let stdout_mutex_clone = self.stdout.clone();
         ctrlc::set_handler(move || {
             if call_count == 0 {
-                clear_terminal();
+                clear_terminal(&stdout_mutex_clone);
                 sender_clone
                     .send(Err(BackupError::new("Backup interrupted")))
                     .unwrap();
@@ -168,9 +171,9 @@ impl DockerBackup {
             handle_containers(&running_containers, "stop")?;
         }
 
-        hide_cursor();
+        hide_cursor(&self.stdout);
         let results = self.run();
-        show_cursor();
+        show_cursor(&self.stdout);
 
         if !running_containers.is_empty() {
             println!("Starting containers...");
@@ -243,11 +246,10 @@ impl DockerBackup {
         let sender = self.sender.as_ref().unwrap();
         let mut join_handles: Vec<thread::JoinHandle<()>> = Vec::new();
 
-        let stdout_mutex = Arc::new(Mutex::new(stdout()));
         for (idx, handle) in backup_handles.iter().enumerate() {
             let sender_clone = sender.clone();
             let handle = handle.clone();
-            let stdout_mutex_clone = stdout_mutex.clone();
+            let stdout_mutex_clone = self.stdout.clone();
             let join_handle = thread::spawn(move || {
                 let timer = Instant::now();
                 let stderr = handle.0.lock().unwrap().stderr.take();
@@ -261,10 +263,8 @@ impl DockerBackup {
                                     timer,
                                     format!("{} completed successfully in", handle.1).as_str(),
                                 );
-                                //print_elapsed_time(idx,  &get_elapsed_time(timer, &msg), &stdout_mutex_clone);
-                                sender_clone
-                                    .send(Ok(get_elapsed_time(timer, msg.as_str())))
-                                    .unwrap();
+                                print_elapsed_time(idx, &msg, &stdout_mutex_clone);
+                                sender_clone.send(Ok(msg)).unwrap();
                                 return;
                             } else if let Some(reader) = stderr_reader.as_mut() {
                                 match reader.read_to_end(&mut buffer) {
@@ -342,7 +342,7 @@ impl DockerBackup {
                         }
                     }
                     if results.len() == self.dest_paths.len() {
-                        reset_cursor_after_timers(self.dest_paths.len() as u16);
+                        reset_cursor_after_timers(self.dest_paths.len() as u16, &self.stdout);
                         println!("All backups finished");
                         for join_handle in join_handles {
                             if let Err(err) = join_handle.join() {
