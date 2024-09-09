@@ -5,11 +5,11 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use crossterm::{
-    cursor, execute,
+    cursor::{self, Hide, Show},
+    execute,
     style::Print,
     terminal::{self, ClearType},
 };
@@ -131,11 +131,35 @@ pub fn reset_cursor_after_timers(active_timers: u16) {
     let mut stdout = stdout();
     execute!(
         stdout,
-        cursor::MoveDown(active_timers),
+        cursor::MoveDown(active_timers + 1),
         cursor::MoveToColumn(0),
         terminal::Clear(ClearType::FromCursorDown),
     )
     .unwrap();
 
+    stdout.flush().unwrap();
+}
+
+pub fn clear_terminal() {
+    let mut stdout = stdout();
+    execute!(
+        stdout,
+        terminal::Clear(terminal::ClearType::All),
+        cursor::MoveTo(0, 0),
+    )
+    .unwrap();
+
+    stdout.flush().unwrap();
+}
+
+pub fn hide_cursor() {
+    let mut stdout = stdout();
+    execute!(stdout, Hide).unwrap();
+    stdout.flush().unwrap();
+}
+
+pub fn show_cursor() {
+    let mut stdout = stdout();
+    execute!(stdout, Show).unwrap();
     stdout.flush().unwrap();
 }

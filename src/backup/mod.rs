@@ -2,9 +2,6 @@ use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
-use core::time;
-use crossterm::terminal::{self, ClearType};
-use crossterm::{cursor, execute};
 use std::collections::HashSet;
 use std::io::{stdout, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -14,8 +11,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use utils::{
-    check_docker, check_running_containers, create_new_dir, exclude_volumes, get_elapsed_time,
-    handle_containers, parse_destination_path, print_elapsed_time, reset_cursor_after_timers,
+    check_docker, check_running_containers, clear_terminal, create_new_dir, exclude_volumes,
+    get_elapsed_time, handle_containers, hide_cursor, parse_destination_path, print_elapsed_time,
+    reset_cursor_after_timers, show_cursor,
 };
 
 mod backup_result;
@@ -133,6 +131,7 @@ impl DockerBackup {
         }
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
+        clear_terminal();
         let containers = check_running_containers()?;
         let mut running_containers: HashSet<&str> =
             containers.trim().split('\n').collect::<HashSet<&str>>();
@@ -148,11 +147,11 @@ impl DockerBackup {
         let sender_clone = sender.clone();
         ctrlc::set_handler(move || {
             if call_count == 0 {
-                reset_cursor_after_timers(2);
-                println!("Backup interrputed, press Ctrl+C again to force exit");
+                clear_terminal();
                 sender_clone
                     .send(Err(BackupError::new("Backup interrupted")))
                     .unwrap();
+                println!("Backup interrputed, press Ctrl+C again to force exit");
                 call_count += 1;
             } else {
                 println!("Forcing exit...");
@@ -169,7 +168,9 @@ impl DockerBackup {
             handle_containers(&running_containers, "stop")?;
         }
 
+        hide_cursor();
         let results = self.run();
+        show_cursor();
 
         if !running_containers.is_empty() {
             println!("Starting containers...");
