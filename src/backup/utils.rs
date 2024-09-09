@@ -10,6 +10,7 @@ use std::{
 
 use crossterm::{
     cursor, execute,
+    style::Print,
     terminal::{self, ClearType},
 };
 
@@ -109,31 +110,32 @@ pub fn get_elapsed_time(start: std::time::Instant, description: &str) -> String 
     )
 }
 
-pub fn print_elapsed_time(
-    timer_id: usize,
-    elapsed: Instant,
-    description: &str,
-    stdout_mutex: &Arc<Mutex<Stdout>>,
-) {
-    let (_cols, rows) = terminal::size().unwrap();
+pub fn print_elapsed_time(timer_id: usize, message: &String, stdout_mutex: &Arc<Mutex<Stdout>>) {
     let mut stdout = stdout_mutex.lock().unwrap();
 
     execute!(
         stdout,
-        cursor::MoveTo(0, rows - timer_id as u16),
-        terminal::Clear(ClearType::CurrentLine)
+        cursor::SavePosition,
+        cursor::MoveDown(timer_id as u16 + 1),
+        cursor::MoveToColumn(0),
+        terminal::Clear(ClearType::CurrentLine),
+        Print(message),
+        cursor::RestorePosition,
     )
     .unwrap();
-    write!(stdout, "{}", get_elapsed_time(elapsed, description)).unwrap();
+
     stdout.flush().unwrap();
 }
 
-pub fn hide_cursor() {
-    print!("\x1B[?25l");
-    stdout().flush().unwrap();
-}
+pub fn reset_cursor_after_timers(active_timers: u16) {
+    let mut stdout = stdout();
+    execute!(
+        stdout,
+        cursor::MoveDown(active_timers),
+        cursor::MoveToColumn(0),
+        terminal::Clear(ClearType::FromCursorDown),
+    )
+    .unwrap();
 
-pub fn show_cursor() {
-    print!("\x1B[?25h");
-    stdout().flush().unwrap();
+    stdout.flush().unwrap();
 }
