@@ -2,6 +2,9 @@ use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
+use core::time;
+use crossterm::terminal::{self, ClearType};
+use crossterm::{cursor, execute};
 use std::collections::HashSet;
 use std::io::{stdout, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -12,7 +15,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, check_running_containers, create_new_dir, exclude_volumes, get_elapsed_time,
-    handle_containers, hide_cursor, parse_destination_path, print_elapsed_time, show_cursor,
+    handle_containers, parse_destination_path, print_elapsed_time, reset_cursor_after_timers,
 };
 
 mod backup_result;
@@ -145,7 +148,7 @@ impl DockerBackup {
         let sender_clone = sender.clone();
         ctrlc::set_handler(move || {
             if call_count == 0 {
-                println!();
+                reset_cursor_after_timers(2);
                 println!("Backup interrputed, press Ctrl+C again to force exit");
                 sender_clone
                     .send(Err(BackupError::new("Backup interrupted")))
@@ -166,9 +169,7 @@ impl DockerBackup {
             handle_containers(&running_containers, "stop")?;
         }
 
-        hide_cursor();
         let results = self.run();
-        show_cursor();
 
         if !running_containers.is_empty() {
             println!("Starting containers...");
@@ -181,7 +182,7 @@ impl DockerBackup {
                     success.notify(&self);
                 }
                 Err(err) => {
-                    println!("{}", err.message);
+                    //println!("{}", err.message);
                     err.notify(&self);
                 }
             }
@@ -255,11 +256,13 @@ impl DockerBackup {
                     if let Ok(status) = handle.0.lock().unwrap().try_wait() {
                         if let Some(status) = status {
                             if status.success() {
+                                let msg = get_elapsed_time(
+                                    timer,
+                                    format!("{} completed successfully in", handle.1).as_str(),
+                                );
+                                //print_elapsed_time(idx,  &get_elapsed_time(timer, &msg), &stdout_mutex_clone);
                                 sender_clone
-                                    .send(Ok(get_elapsed_time(
-                                        timer,
-                                        format!("{} completed successfully in", handle.1).as_str(),
-                                    )))
+                                    .send(Ok(get_elapsed_time(timer, msg.as_str())))
                                     .unwrap();
                                 return;
                             } else if let Some(reader) = stderr_reader.as_mut() {
@@ -292,8 +295,15 @@ impl DockerBackup {
                                 return;
                             }
                         } else {
-                            let description = format!("\r{} running time", handle.1);
-                            print_elapsed_time(idx + 1, timer, &description, &stdout_mutex_clone);
+                            //let description = format!("\r{} running time {}", handle.1, get_elapsed_time(time, description));
+                            print_elapsed_time(
+                                idx,
+                                &get_elapsed_time(
+                                    timer,
+                                    format!("\r{} running time", handle.1).as_str(),
+                                ),
+                                &stdout_mutex_clone,
+                            );
                             thread::sleep(std::time::Duration::from_secs(1));
                         }
                     }
@@ -307,12 +317,10 @@ impl DockerBackup {
                 Ok(message) => {
                     match message {
                         Ok(result) => {
-                            println!();
-                            println!("{}", result);
                             results.push(Ok(BackupSuccess::new(&result)));
                         }
                         Err(err) => {
-                            println!("{}", err.message);
+                            //println!("{}", err.message);
                             if err.message == "Backup interrupted" {
                                 for handle in backup_handles {
                                     if let Err(err) = handle.0.lock().unwrap().kill() {
@@ -333,6 +341,7 @@ impl DockerBackup {
                         }
                     }
                     if results.len() == self.dest_paths.len() {
+                        reset_cursor_after_timers(self.dest_paths.len() as u16);
                         println!("All backups finished");
                         for join_handle in join_handles {
                             if let Err(err) = join_handle.join() {
