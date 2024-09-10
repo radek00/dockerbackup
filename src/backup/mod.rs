@@ -184,7 +184,6 @@ impl DockerBackup {
                     success.notify(&self);
                 }
                 Err(err) => {
-                    //println!("{}", err.message);
                     err.notify(&self);
                 }
             }
@@ -294,7 +293,6 @@ impl DockerBackup {
                                 return;
                             }
                         } else {
-                            //let description = format!("\r{} running time {}", handle.1, get_elapsed_time(time, description));
                             print_elapsed_time(
                                 idx,
                                 &get_elapsed_time(
@@ -319,7 +317,6 @@ impl DockerBackup {
                             results.push(Ok(BackupSuccess::new(&result)));
                         }
                         Err(err) => {
-                            //println!("{}", err.message);
                             if err.message == "Backup interrupted" {
                                 for handle in backup_handles {
                                     if let Err(err) = handle.0.lock().unwrap().kill() {
