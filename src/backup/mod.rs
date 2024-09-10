@@ -147,14 +147,12 @@ impl DockerBackup {
         let mut call_count = 0;
 
         let sender_clone = sender.clone();
-        let stdout_mutex_clone = self.stdout.clone();
         ctrlc::set_handler(move || {
             if call_count == 0 {
-                clear_terminal(&stdout_mutex_clone);
                 sender_clone
                     .send(Err(BackupError::new("Backup interrupted")))
                     .unwrap();
-                println!("Backup interrputed, press Ctrl+C again to force exit");
+
                 call_count += 1;
             } else {
                 println!("Forcing exit...");
@@ -335,6 +333,12 @@ impl DockerBackup {
                                         eprintln!("Error joining thread: {:?}", err);
                                     }
                                 }
+                                reset_cursor_after_timers(
+                                    self.dest_paths.len() as u16,
+                                    &self.stdout,
+                                );
+                                println!("Backup interrputed, press Ctrl+C again to force exit");
+
                                 results.push(Err(BackupError::new("Backup interrupted")));
                                 return results;
                             }
