@@ -1,0 +1,48 @@
+services:
+  dind:
+    image: docker:dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - docker_data:/var/lib/docker
+    networks:
+      - test-net
+
+  ssh-target:
+    image: lscr.io/linuxserver/openssh-server:latest
+    environment:
+      PUID: 0
+      PGID: 0
+      USER_NAME: testuser
+      PASSWORD_ACCESS: "true"
+      USER_PASSWORD: "password" # Fallback
+      SUDO_ACCESS: "true"
+    volumes:
+      - ssh_config:/config
+    networks:
+      - test-net
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ../:/app
+      - docker_data:/var/lib/docker
+      - ssh_config:/ssh_config
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+    depends_on:
+      - dind
+      - ssh-target
+    networks:
+      - test-net
+    command: tail -f /dev/null
+
+volumes:
+  docker_data:
+  ssh_config:
+
+networks:
+  test-net:
