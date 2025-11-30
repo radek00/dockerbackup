@@ -198,7 +198,7 @@ impl DockerBackup {
         let total_size = match get_volumes_size(&self.volume_path, &self.excluded_volumes) {
             Ok(size) => size,
             Err(err) => {
-                results.push(err);
+                results.push(Err(err));
                 return results;
             }
         };
