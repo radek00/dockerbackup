@@ -6,16 +6,18 @@ set -e
 
 # Build
 echo "Building dockerbackup..."
-cargo build
+cargo build --release
 
 # Prepare destination directories
 rm -rf /tmp/local_backup
 mkdir -p /tmp/local_backup
 
+BINARY=./target/release/dockerbackup
+
 # Run backup
 
 echo "Running backup..."
-./target/debug/dockerbackup \
+$BINARY \
     -d /tmp/local_backup \
     -d testuser@ssh-target:/config/remote_backup,unix \
     --volumes /var/lib/docker/volumes \
@@ -79,7 +81,7 @@ mount -t tmpfs -o size=1M tmpfs /tmp/small_local
 dd if=/dev/zero of=/tmp/small_local/fill bs=1024 count=1000 2>/dev/null || true
 
 # Run backup expecting failure
-if ./target/debug/dockerbackup -d /tmp/small_local --volumes /var/lib/docker/volumes 2>&1 | grep -q "Not enough space"; then
+if $BINARY -d /tmp/small_local --volumes /var/lib/docker/volumes 2>&1 | grep -q "Not enough space"; then
     echo "Local space check passed (backup failed as expected)."
 else
     echo "Local space check failed (backup did not fail as expected)!"
@@ -92,7 +94,7 @@ umount /tmp/small_local
 echo "Testing Remote Space Check..."
 ssh -o StrictHostKeyChecking=no testuser@ssh-target "mkdir -p /config/small_remote && mount -t tmpfs -o size=1M tmpfs /config/small_remote && dd if=/dev/zero of=/config/small_remote/fill bs=1024 count=1000 2>/dev/null || true"
 
-if ./target/debug/dockerbackup -d testuser@ssh-target:/config/small_remote,unix --volumes /var/lib/docker/volumes 2>&1 | grep -q "Not enough space"; then
+if $BINARY -d testuser@ssh-target:/config/small_remote,unix --volumes /var/lib/docker/volumes 2>&1 | grep -q "Not enough space"; then
     echo "Remote space check passed (backup failed as expected)."
 else
     echo "Remote space check failed (backup did not fail as expected)!"
