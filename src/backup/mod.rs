@@ -11,9 +11,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use utils::{
-    check_docker, check_running_containers, clear_terminal, create_new_dir, exclude_volumes,
-    get_elapsed_time, handle_containers, hide_cursor, parse_destination_path, print_elapsed_time,
-    reset_cursor_after_timers, show_cursor,
+    check_available_space, check_docker, check_running_containers, clear_terminal, create_new_dir,
+    exclude_volumes, get_elapsed_time, get_volumes_size, handle_containers, hide_cursor,
+    parse_destination_path, print_elapsed_time, reset_cursor_after_timers, show_cursor,
 };
 
 mod backup_result;
@@ -184,6 +184,7 @@ impl DockerBackup {
                     success.notify(&self);
                 }
                 Err(err) => {
+                    eprintln!("Error: {}", err);
                     err.notify(&self);
                 }
             }
@@ -194,9 +195,24 @@ impl DockerBackup {
         println!("Backup started...");
         let mut results: Vec<Result<BackupSuccess, BackupError>> = Vec::new();
 
+        let total_size = match get_volumes_size(&self.volume_path, &self.excluded_volumes) {
+            Ok(size) => size,
+            Err(err) => {
+                results.push(err);
+                return results;
+            }
+        };
+
+        println!("Total size to backup: {:.2} MB", total_size as f64 / (1024.0 * 1024.0));
+
         let mut backup_handles: Vec<(Arc<Mutex<Child>>, String)> = Vec::new();
 
         for dest in &self.dest_paths {
+            if let Err(err) = check_available_space(dest, total_size) {
+                results.push(Err(err));
+                continue;
+            }
+
             if dest.0.contains('@') {
                 let ssh_path_parts: Vec<&str> = dest.0.splitn(2, ':').collect();
 

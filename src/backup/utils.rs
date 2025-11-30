@@ -99,6 +99,187 @@ pub fn parse_destination_path(path: &str) -> Result<(String, TargetOs), String> 
     }
 }
 
+pub fn get_volumes_size(
+    volume_path: &PathBuf,
+    excluded_volumes: &Vec<String>,
+) -> Result<u64, BackupError> {
+    let mut total_size = 0;
+    let entries = fs::read_dir(volume_path)
+        .map_err(|e| BackupError::new(&format!("Failed to read volume directory: {}", e)))?;
+
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| BackupError::new(&format!("Failed to read entry: {}", e)))?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+
+        if excluded_volumes.contains(&name.to_string()) {
+            continue;
+        }
+
+        total_size += get_dir_size(&path).map_err(|e| {
+            BackupError::new(&format!("Failed to calculate size for {}: {}", name, e))
+        })?;
+    }
+    Ok(total_size)
+}
+
+fn get_dir_size(path: &Path) -> std::io::Result<u64> {
+    let mut size = 0;
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                size += get_dir_size(&path)?;
+            } else {
+                size += entry.metadata()?.len();
+            }
+        }
+    } else {
+        size = path.metadata()?.len();
+    }
+    Ok(size)
+}
+
+pub fn check_available_space(
+    dest: &(String, TargetOs),
+    required_size: u64,
+) -> Result<(), BackupError> {
+    let available_space = if dest.0.contains('@') {
+        let parts: Vec<&str> = dest.0.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err(BackupError::new("Invalid ssh path"));
+        }
+        check_ssh_available_space(parts[0], parts[1], &dest.1)?
+    } else {
+        check_local_available_space(&dest.0)?
+    };
+
+    if available_space < required_size {
+        return Err(BackupError::new(&format!(
+            "Not enough space on destination {}. Required: {} bytes, Available: {} bytes",
+            dest.0, required_size, available_space
+        )));
+    }
+    Ok(())
+}
+
+fn check_local_available_space(path: &str) -> Result<u64, BackupError> {
+    let output = Command::new("df")
+        .arg("-B1")
+        .arg("--output=avail")
+        .arg(path)
+        .output()
+        .map_err(|e| BackupError::new(&format!("Failed to execute df: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(BackupError::new(&format!(
+            "df command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    if lines.len() < 2 {
+        return Err(BackupError::new("Invalid df output"));
+    }
+
+    lines[1]
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| BackupError::new("Failed to parse available space"))
+}
+
+fn check_ssh_available_space(
+    host: &str,
+    path: &str,
+    target_os: &TargetOs,
+) -> Result<u64, BackupError> {
+    match target_os {
+        TargetOs::Unix => {
+            let output = Command::new("ssh")
+                .arg(host)
+                .arg("df")
+                .arg("-B1")
+                .arg("--output=avail")
+                .arg(path)
+                .output()
+                .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
+
+            if !output.status.success() {
+                // Fallback for df implementations that don't support --output
+                let output = Command::new("ssh")
+                    .arg(host)
+                    .arg("df")
+                    .arg("-k")
+                    .arg(path)
+                    .output()
+                    .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
+
+                if !output.status.success() {
+                    return Err(BackupError::new(&format!(
+                        "ssh df command failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let lines: Vec<&str> = stdout.lines().collect();
+                if lines.len() < 2 {
+                    return Err(BackupError::new("Invalid df output"));
+                }
+                // Parse 4th column
+                let parts: Vec<&str> = lines[1].split_whitespace().collect();
+                if parts.len() < 4 {
+                    return Err(BackupError::new("Invalid df output format"));
+                }
+                let kbytes = parts[3]
+                    .parse::<u64>()
+                    .map_err(|_| BackupError::new("Failed to parse available space"))?;
+                return Ok(kbytes * 1024);
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let lines: Vec<&str> = stdout.lines().collect();
+            if lines.len() < 2 {
+                return Err(BackupError::new("Invalid df output"));
+            }
+
+            lines[1]
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| BackupError::new("Failed to parse available space"))
+        }
+        TargetOs::Windows => {
+            let ps_command = format!(
+                "powershell -Command \"Get-Volume -FilePath '{}' | Select-Object -ExpandProperty SizeRemaining\"",
+                path
+            );
+
+            let output = Command::new("ssh")
+                .arg(host)
+                .arg(ps_command)
+                .output()
+                .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
+
+            if !output.status.success() {
+                return Err(BackupError::new(&format!(
+                    "ssh powershell command failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| BackupError::new("Failed to parse available space"))
+        }
+    }
+}
+
 pub fn get_elapsed_time(start: std::time::Instant, description: &str) -> String {
     let elapsed = start.elapsed();
     format!(
