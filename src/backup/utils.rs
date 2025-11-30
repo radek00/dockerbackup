@@ -16,6 +16,18 @@ use crossterm::{
 
 use super::{backup_result::BackupError, TargetOs};
 
+#[derive(Debug, Clone)]
+pub enum BackupDestination {
+    Local {
+        path: String,
+    },
+    Ssh {
+        host: String,
+        path: String,
+        target_os: TargetOs,
+    },
+}
+
 pub fn check_docker() -> Result<(), BackupError> {
     let status = Command::new("docker").arg("--version").status()?;
     if status.success() {
@@ -75,7 +87,7 @@ pub fn handle_containers(containers: &HashSet<&str>, command: &str) -> Result<()
     Err(BackupError::new("Error handling containers"))
 }
 
-pub fn parse_destination_path(path: &str) -> Result<(String, TargetOs), String> {
+pub fn parse_destination_path(path: &str) -> Result<BackupDestination, String> {
     if path.contains('@') {
         let tuple: Vec<&str> = path.splitn(2, ',').collect();
         if tuple.len() != 2 {
@@ -86,14 +98,21 @@ pub fn parse_destination_path(path: &str) -> Result<(String, TargetOs), String> 
 
         let parts: Vec<&str> = tuple[0].splitn(2, ':').collect();
         if parts.len() == 2 && parts[0].contains('@') {
-            Ok((tuple[0].to_owned(), TargetOs::from_str(tuple[1])?))
+            Ok(BackupDestination::Ssh {
+                host: parts[0].to_owned(),
+                path: parts[1].to_owned(),
+                target_os: TargetOs::from_str(tuple[1])?,
+            })
         } else {
             Err(String::from(
                 "SSH path must be in the format user@host:path",
             ))
         }
     } else if Path::new(path).exists() {
-        Ok((path.to_owned(), TargetOs::Windows))
+        //local backups work on linux only
+        Ok(BackupDestination::Local {
+            path: path.to_owned(),
+        })
     } else {
         Err(String::from("Local path does not exist"))
     }
@@ -144,23 +163,26 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
 }
 
 pub fn check_available_space(
-    dest: &(String, TargetOs),
+    dest: &BackupDestination,
     required_size: u64,
 ) -> Result<(), BackupError> {
-    let available_space = if dest.0.contains('@') {
-        let parts: Vec<&str> = dest.0.splitn(2, ':').collect();
-        if parts.len() != 2 {
-            return Err(BackupError::new("Invalid ssh path"));
-        }
-        check_ssh_available_space(parts[0], parts[1], &dest.1)?
-    } else {
-        check_local_available_space(&dest.0)?
+    let available_space = match dest {
+        BackupDestination::Ssh {
+            host,
+            path,
+            target_os,
+        } => check_ssh_available_space(host, path, target_os)?,
+        BackupDestination::Local { path } => check_local_available_space(path)?,
     };
 
     if available_space < required_size {
+        let dest_str = match dest {
+            BackupDestination::Ssh { host, path, .. } => &format!("{}:{}", host, path),
+            BackupDestination::Local { path } => path,
+        };
         return Err(BackupError::new(&format!(
             "Not enough space on destination {}. Required: {} bytes, Available: {} bytes",
-            dest.0, required_size, available_space
+            dest_str, required_size, available_space
         )));
     }
     Ok(())

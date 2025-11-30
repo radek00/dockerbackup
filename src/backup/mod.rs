@@ -14,6 +14,7 @@ use utils::{
     check_available_space, check_docker, check_running_containers, clear_terminal, create_new_dir,
     exclude_volumes, get_elapsed_time, get_volumes_size, handle_containers, hide_cursor,
     parse_destination_path, print_elapsed_time, reset_cursor_after_timers, show_cursor,
+    BackupDestination,
 };
 
 mod backup_result;
@@ -24,6 +25,7 @@ type BackupChannel = (
     mpsc::Sender<Result<String, BackupError>>,
     mpsc::Receiver<Result<String, BackupError>>,
 );
+
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TargetOs {
@@ -44,7 +46,7 @@ impl TargetOs {
 }
 
 pub struct DockerBackup {
-    dest_paths: Vec<(String, TargetOs)>,
+    dest_paths: Vec<BackupDestination>,
     new_dir: String,
     volume_path: PathBuf,
     excluded_containers: Vec<String>,
@@ -118,7 +120,7 @@ impl DockerBackup {
 
         DockerBackup {
             dest_paths: matches
-                .remove_many::<(String, TargetOs)>("dest_path")
+                .remove_many::<BackupDestination>("dest_path")
                 .unwrap()
                 .collect(),
             new_dir,
@@ -213,43 +215,41 @@ impl DockerBackup {
                 continue;
             }
 
-            if dest.0.contains('@') {
-                let ssh_path_parts: Vec<&str> = dest.0.splitn(2, ':').collect();
-
-                if ssh_path_parts.len() != 2 {
-                    results.push(Err(BackupError::new("Invalid ssh path")));
-                    continue;
-                }
-
-                match self.spawn_ssh_backup(ssh_path_parts, &dest.1) {
+            match dest {
+                BackupDestination::Ssh {
+                    host,
+                    path,
+                    target_os,
+                } => match self.spawn_ssh_backup(host, path, target_os) {
                     Ok(child) => {
                         backup_handles.push((
                             Arc::new(Mutex::new(child)),
-                            format!("SSH backup to destination {}", dest.0),
+                            format!("SSH backup to destination {}:{}", host, path),
                         ));
                     }
                     Err(err) => {
                         results.push(Err(err));
                     }
-                }
-            } else {
-                let dest_path = Path::new(&dest.0);
-                if let Err(err) = create_new_dir(dest_path, &self.new_dir) {
-                    results.push(Err(err));
-                    continue;
-                }
-                match self.spawn_local_rsync_backup(dest_path) {
-                    Ok(child) => {
-                        backup_handles.push((
-                            Arc::new(Mutex::new(child)),
-                            format!("Rsync backup to destination {}", dest.0),
-                        ));
-                    }
-                    Err(err) => {
+                },
+                BackupDestination::Local { path } => {
+                    let dest_path = Path::new(path);
+                    if let Err(err) = create_new_dir(dest_path, &self.new_dir) {
                         results.push(Err(err));
+                        continue;
+                    }
+                    match self.spawn_local_rsync_backup(dest_path) {
+                        Ok(child) => {
+                            backup_handles.push((
+                                Arc::new(Mutex::new(child)),
+                                format!("Rsync backup to destination {}", path),
+                            ));
+                        }
+                        Err(err) => {
+                            results.push(Err(err));
+                        }
                     }
                 }
-            };
+            }
         }
 
         if results.len() == self.dest_paths.len() {
@@ -392,7 +392,8 @@ impl DockerBackup {
     }
     fn spawn_ssh_backup(
         &self,
-        ssh_path_parts: Vec<&str>,
+        host: &str,
+        path: &str,
         target_os: &TargetOs,
     ) -> Result<Child, BackupError> {
         let mut tar_volumes = Command::new("tar");
@@ -403,10 +404,10 @@ impl DockerBackup {
 
         let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
 
-        let dest_path = append_to_path(ssh_path_parts[1], &self.new_dir, target_os);
+        let dest_path = append_to_path(path, &self.new_dir, target_os);
 
         let ssh = Command::new("ssh")
-            .arg(ssh_path_parts[0])
+            .arg(host)
             .arg("mkdir")
             .arg(&dest_path)
             .arg("&&")
