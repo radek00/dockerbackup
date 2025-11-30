@@ -210,35 +210,10 @@ fn check_ssh_available_space(
                 .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
 
             if !output.status.success() {
-                // Fallback for df implementations that don't support --output
-                let output = Command::new("ssh")
-                    .arg(host)
-                    .arg("df")
-                    .arg("-k")
-                    .arg(path)
-                    .output()
-                    .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
-
-                if !output.status.success() {
-                    return Err(BackupError::new(&format!(
-                        "ssh df command failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )));
-                }
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let lines: Vec<&str> = stdout.lines().collect();
-                if lines.len() < 2 {
-                    return Err(BackupError::new("Invalid df output"));
-                }
-                // Parse 4th column
-                let parts: Vec<&str> = lines[1].split_whitespace().collect();
-                if parts.len() < 4 {
-                    return Err(BackupError::new("Invalid df output format"));
-                }
-                let kbytes = parts[3]
-                    .parse::<u64>()
-                    .map_err(|_| BackupError::new("Failed to parse available space"))?;
-                return Ok(kbytes * 1024);
+                        return Err(BackupError::new(&format!(
+            "ssh df command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
             }
 
             let stdout = String::from_utf8_lossy(&output.stdout);
