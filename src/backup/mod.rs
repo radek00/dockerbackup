@@ -4,20 +4,22 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use std::collections::HashSet;
 use std::io::{stdout, BufReader, Read, Stdout};
-use std::path::{Path, PathBuf};
-use std::process::{exit, Child, Command, Stdio};
+use std::path::PathBuf;
+use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use utils::{
-    check_available_space, check_docker, check_running_containers, clear_terminal, create_new_dir,
-    exclude_volumes, get_elapsed_time, get_volumes_size, handle_containers, hide_cursor,
-    parse_destination_path, print_elapsed_time, reset_cursor_after_timers, show_cursor,
-    BackupDestination,
+    check_docker, check_running_containers, clear_terminal, get_elapsed_time, get_volumes_size,
+    handle_containers, hide_cursor, parse_destination_path, print_elapsed_time,
+    reset_cursor_after_timers, show_cursor,
 };
 
+use crate::backup::destination::BackupDestination;
+
 mod backup_result;
+mod destination;
 mod notification;
 mod utils;
 
@@ -25,7 +27,6 @@ type BackupChannel = (
     mpsc::Sender<Result<String, BackupError>>,
     mpsc::Receiver<Result<String, BackupError>>,
 );
-
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TargetOs {
@@ -46,7 +47,7 @@ impl TargetOs {
 }
 
 pub struct DockerBackup {
-    dest_paths: Vec<BackupDestination>,
+    dest_paths: Vec<Arc<dyn BackupDestination>>,
     new_dir: String,
     volume_path: PathBuf,
     excluded_containers: Vec<String>,
@@ -120,7 +121,7 @@ impl DockerBackup {
 
         DockerBackup {
             dest_paths: matches
-                .remove_many::<BackupDestination>("dest_path")
+                .remove_many::<Arc<dyn BackupDestination>>("dest_path")
                 .unwrap()
                 .collect(),
             new_dir,
@@ -205,49 +206,33 @@ impl DockerBackup {
             }
         };
 
-        println!("Total size to backup: {:.2} MB", total_size as f64 / (1024.0 * 1024.0));
+        println!(
+            "Total size to backup: {:.2} MB",
+            total_size as f64 / (1024.0 * 1024.0)
+        );
 
         let mut backup_handles: Vec<(Arc<Mutex<Child>>, String)> = Vec::new();
 
         for dest in &self.dest_paths {
-            if let Err(err) = check_available_space(dest, total_size) {
+            if let Err(err) = dest.check_available_space(total_size) {
                 results.push(Err(err));
                 continue;
             }
 
-            match dest {
-                BackupDestination::Ssh {
-                    host,
-                    path,
-                    target_os,
-                } => match self.spawn_ssh_backup(host, path, target_os) {
-                    Ok(child) => {
-                        backup_handles.push((
-                            Arc::new(Mutex::new(child)),
-                            format!("SSH backup to destination {}:{}", host, path),
-                        ));
-                    }
-                    Err(err) => {
-                        results.push(Err(err));
-                    }
-                },
-                BackupDestination::Local { path } => {
-                    let dest_path = Path::new(path);
-                    if let Err(err) = create_new_dir(dest_path, &self.new_dir) {
-                        results.push(Err(err));
-                        continue;
-                    }
-                    match self.spawn_local_rsync_backup(dest_path) {
-                        Ok(child) => {
-                            backup_handles.push((
-                                Arc::new(Mutex::new(child)),
-                                format!("Rsync backup to destination {}", path),
-                            ));
-                        }
-                        Err(err) => {
-                            results.push(Err(err));
-                        }
-                    }
+            if let Err(err) = dest.prepare(&self.new_dir) {
+                results.push(Err(err));
+                continue;
+            }
+
+            match dest.spawn_backup(&self.volume_path, &self.excluded_volumes, &self.new_dir) {
+                Ok(child) => {
+                    backup_handles.push((
+                        Arc::new(Mutex::new(child)),
+                        format!("Backup to destination {}", dest.get_display_name()),
+                    ));
+                }
+                Err(err) => {
+                    results.push(Err(err));
                 }
             }
         }
@@ -375,58 +360,5 @@ impl DockerBackup {
                 }
             }
         }
-    }
-    fn spawn_local_rsync_backup(&self, dest_path: &Path) -> Result<Child, BackupError> {
-        let mut rsync = Command::new("rsync");
-
-        exclude_volumes(&mut rsync, &self.excluded_volumes, &self.volume_path)?;
-
-        let exec_rsync = rsync
-            .arg("-aW")
-            .arg(&self.volume_path)
-            .arg(dest_path.join(&self.new_dir))
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        Ok(exec_rsync)
-    }
-    fn spawn_ssh_backup(
-        &self,
-        host: &str,
-        path: &str,
-        target_os: &TargetOs,
-    ) -> Result<Child, BackupError> {
-        let mut tar_volumes = Command::new("tar");
-
-        tar_volumes.arg("-cf-").arg("-C").arg(&self.volume_path);
-
-        exclude_volumes(&mut tar_volumes, &self.excluded_volumes, &self.volume_path)?;
-
-        let tar_exec = tar_volumes.arg(".").stdout(Stdio::piped()).spawn()?;
-
-        let dest_path = append_to_path(path, &self.new_dir, target_os);
-
-        let ssh = Command::new("ssh")
-            .arg(host)
-            .arg("mkdir")
-            .arg(&dest_path)
-            .arg("&&")
-            .arg("tar")
-            .arg("-C")
-            .arg(dest_path)
-            .arg("-xf-")
-            .stdin(Stdio::from(tar_exec.stdout.unwrap()))
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        Ok(ssh)
-    }
-}
-
-fn append_to_path(path: &str, new_dir: &String, target_os: &TargetOs) -> String {
-    if target_os == &TargetOs::Windows {
-        format!("{}\\{}", path, new_dir)
-    } else {
-        format!("{}/{}", path, new_dir)
     }
 }
