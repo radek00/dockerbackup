@@ -78,7 +78,7 @@ pub fn parse_destination_path(path: &str) -> Result<Arc<dyn BackupDestination>, 
 
 pub fn get_volumes_size(
     volume_path: &PathBuf,
-    excluded_volumes: &Vec<String>,
+    excluded_volumes: &[String],
 ) -> Result<u64, BackupError> {
     let mut total_size = 0;
     let entries = fs::read_dir(volume_path)
