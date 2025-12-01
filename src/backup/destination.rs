@@ -35,12 +35,12 @@ pub trait BackupDestination: std::fmt::Debug + Send + Sync {
     }
     fn available_space(&self) -> Result<u64, BackupError>;
 
-    fn prepare(&self, new_dir: &String) -> Result<(), BackupError>;
+    fn prepare(&self, new_dir: &str) -> Result<(), BackupError>;
     fn spawn_backup(
         &self,
         volume_path: &Path,
-        excluded_volumes: &Vec<String>,
-        new_dir: &String,
+        excluded_volumes: &[String],
+        new_dir: &str,
     ) -> Result<Child, BackupError>;
     fn get_display_name(&self) -> String;
 }
@@ -73,7 +73,7 @@ impl BackupDestination for LocalDestination {
             .map_err(|_| BackupError::new("Failed to parse available space"))
     }
 
-    fn prepare(&self, new_dir: &String) -> Result<(), BackupError> {
+    fn prepare(&self, new_dir: &str) -> Result<(), BackupError> {
         let dest_path = Path::new(&self.path);
         let dir_path = dest_path.join(new_dir);
         if dir_path.exists() {
@@ -86,8 +86,8 @@ impl BackupDestination for LocalDestination {
     fn spawn_backup(
         &self,
         volume_path: &Path,
-        excluded_volumes: &Vec<String>,
-        new_dir: &String,
+        excluded_volumes: &[String],
+        new_dir: &str,
     ) -> Result<Child, BackupError> {
         let mut rsync = Command::new("rsync");
 
@@ -168,15 +168,15 @@ impl BackupDestination for SshDestination {
         }
     }
 
-    fn prepare(&self, _new_dir: &String) -> Result<(), BackupError> {
+    fn prepare(&self, _new_dir: &str) -> Result<(), BackupError> {
         Ok(())
     }
 
     fn spawn_backup(
         &self,
         volume_path: &Path,
-        excluded_volumes: &Vec<String>,
-        new_dir: &String,
+        excluded_volumes: &[String],
+        new_dir: &str,
     ) -> Result<Child, BackupError> {
         let mut tar_volumes = Command::new("tar");
 
@@ -214,7 +214,7 @@ impl BackupDestination for SshDestination {
     }
 }
 
-fn append_to_path(path: &str, new_dir: &String, target_os: &TargetOs) -> String {
+fn append_to_path(path: &str, new_dir: &str, target_os: &TargetOs) -> String {
     if target_os == &TargetOs::Windows {
         format!("{}\\{}", path, new_dir)
     } else {
@@ -224,7 +224,7 @@ fn append_to_path(path: &str, new_dir: &String, target_os: &TargetOs) -> String 
 
 fn exclude_volumes(
     command: &mut Command,
-    dirs_to_exclude: &Vec<String>,
+    dirs_to_exclude: &[String],
     volume_path: &Path,
 ) -> Result<(), BackupError> {
     let volumes: HashSet<String> = fs::read_dir(volume_path)
