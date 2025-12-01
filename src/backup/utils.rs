@@ -14,19 +14,9 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 
-use super::{backup_result::BackupError, TargetOs};
+use crate::backup::destination::{BackupDestination, LocalDestination, SshDestination};
 
-#[derive(Debug, Clone)]
-pub enum BackupDestination {
-    Local {
-        path: String,
-    },
-    Ssh {
-        host: String,
-        path: String,
-        target_os: TargetOs,
-    },
-}
+use super::{backup_result::BackupError, TargetOs};
 
 pub fn check_docker() -> Result<(), BackupError> {
     let status = Command::new("docker").arg("--version").status()?;
@@ -44,38 +34,6 @@ pub fn check_running_containers() -> Result<String, BackupError> {
     Ok(containers_list)
 }
 
-pub fn exclude_volumes(
-    command: &mut Command,
-    dirs_to_exclude: &Vec<String>,
-    volume_path: &PathBuf,
-) -> Result<(), BackupError> {
-    let volumes: HashSet<String> = fs::read_dir(volume_path)
-        .map_err(|e| BackupError::new(&format!("Failed to read volume directory: {}", e)))?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().to_str().map(|s| s.to_string()))
-        .collect();
-
-    for volume in dirs_to_exclude {
-        if !volumes.iter().any(|x| x.ends_with(volume)) {
-            return Err(BackupError::new(&format!(
-                "Excluded volume '{}' does not exist",
-                volume
-            )));
-        }
-        command.arg(format!("--exclude={}", volume));
-    }
-    Ok(())
-}
-
-pub fn create_new_dir(dest_path: &Path, new_dir: &String) -> Result<(), BackupError> {
-    let dir_path = dest_path.join(new_dir);
-    if dir_path.exists() {
-        return Err(BackupError::new("Directory already exists"));
-    }
-    std::fs::create_dir_all(dir_path)?;
-    Ok(())
-}
-
 pub fn handle_containers(containers: &HashSet<&str>, command: &str) -> Result<(), BackupError> {
     let cmd_result = Command::new("docker")
         .arg(command)
@@ -87,7 +45,7 @@ pub fn handle_containers(containers: &HashSet<&str>, command: &str) -> Result<()
     Err(BackupError::new("Error handling containers"))
 }
 
-pub fn parse_destination_path(path: &str) -> Result<BackupDestination, String> {
+pub fn parse_destination_path(path: &str) -> Result<Arc<dyn BackupDestination>, String> {
     if path.contains('@') {
         let tuple: Vec<&str> = path.splitn(2, ',').collect();
         if tuple.len() != 2 {
@@ -98,11 +56,11 @@ pub fn parse_destination_path(path: &str) -> Result<BackupDestination, String> {
 
         let parts: Vec<&str> = tuple[0].splitn(2, ':').collect();
         if parts.len() == 2 && parts[0].contains('@') {
-            Ok(BackupDestination::Ssh {
+            Ok(Arc::new(SshDestination {
                 host: parts[0].to_owned(),
                 path: parts[1].to_owned(),
                 target_os: TargetOs::from_str(tuple[1])?,
-            })
+            }))
         } else {
             Err(String::from(
                 "SSH path must be in the format user@host:path",
@@ -110,9 +68,9 @@ pub fn parse_destination_path(path: &str) -> Result<BackupDestination, String> {
         }
     } else if Path::new(path).exists() {
         //local backups work on linux only
-        Ok(BackupDestination::Local {
+        Ok(Arc::new(LocalDestination {
             path: path.to_owned(),
-        })
+        }))
     } else {
         Err(String::from("Local path does not exist"))
     }
@@ -127,8 +85,7 @@ pub fn get_volumes_size(
         .map_err(|e| BackupError::new(&format!("Failed to read volume directory: {}", e)))?;
 
     for entry in entries {
-        let entry =
-            entry.map_err(|e| BackupError::new(&format!("Failed to read entry: {}", e)))?;
+        let entry = entry.map_err(|e| BackupError::new(&format!("Failed to read entry: {}", e)))?;
         let path = entry.path();
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
@@ -160,121 +117,6 @@ fn get_dir_size(path: &Path) -> std::io::Result<u64> {
         size = path.metadata()?.len();
     }
     Ok(size)
-}
-
-pub fn check_available_space(
-    dest: &BackupDestination,
-    required_size: u64,
-) -> Result<(), BackupError> {
-    let available_space = match dest {
-        BackupDestination::Ssh {
-            host,
-            path,
-            target_os,
-        } => check_ssh_available_space(host, path, target_os)?,
-        BackupDestination::Local { path } => check_local_available_space(path)?,
-    };
-
-    if available_space < required_size {
-        let dest_str = match dest {
-            BackupDestination::Ssh { host, path, .. } => &format!("{}:{}", host, path),
-            BackupDestination::Local { path } => path,
-        };
-        return Err(BackupError::new(&format!(
-            "Not enough space on destination {}. Required: {} bytes, Available: {} bytes",
-            dest_str, required_size, available_space
-        )));
-    }
-    Ok(())
-}
-
-fn check_local_available_space(path: &str) -> Result<u64, BackupError> {
-    let output = Command::new("df")
-        .arg("-B1")
-        .arg("--output=avail")
-        .arg(path)
-        .output()
-        .map_err(|e| BackupError::new(&format!("Failed to execute df: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(BackupError::new(&format!(
-            "df command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-    if lines.len() < 2 {
-        return Err(BackupError::new("Invalid df output"));
-    }
-
-    lines[1]
-        .trim()
-        .parse::<u64>()
-        .map_err(|_| BackupError::new("Failed to parse available space"))
-}
-
-fn check_ssh_available_space(
-    host: &str,
-    path: &str,
-    target_os: &TargetOs,
-) -> Result<u64, BackupError> {
-    match target_os {
-        TargetOs::Unix => {
-            let output = Command::new("ssh")
-                .arg(host)
-                .arg("df")
-                .arg("-B1")
-                .arg("--output=avail")
-                .arg(path)
-                .output()
-                .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
-
-            if !output.status.success() {
-                        return Err(BackupError::new(&format!(
-            "ssh df command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let lines: Vec<&str> = stdout.lines().collect();
-            if lines.len() < 2 {
-                return Err(BackupError::new("Invalid df output"));
-            }
-
-            lines[1]
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| BackupError::new("Failed to parse available space"))
-        }
-        TargetOs::Windows => {
-            let ps_command = format!(
-                "powershell -Command \"Get-Volume -FilePath '{}' | Select-Object -ExpandProperty SizeRemaining\"",
-                path
-            );
-
-            let output = Command::new("ssh")
-                .arg(host)
-                .arg(ps_command)
-                .output()
-                .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
-
-            if !output.status.success() {
-                return Err(BackupError::new(&format!(
-                    "ssh powershell command failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )));
-            }
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| BackupError::new("Failed to parse available space"))
-        }
-    }
 }
 
 pub fn get_elapsed_time(start: std::time::Instant, description: &str) -> String {
