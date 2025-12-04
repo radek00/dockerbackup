@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::{thread, time};
 
+use crate::backup::logger::{log, LogLevel};
+
 pub trait Notification {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>>;
 }
@@ -34,7 +36,10 @@ impl<'a> Notification for Gotify<'a> {
         let client = reqwest::blocking::Client::new();
 
         for attempt in 0..10 {
-            println!("Sending request to Gotify.Attempt {}", attempt);
+            log(
+                &format!("Sending request to Gotify.Attempt {}", attempt),
+                LogLevel::Info,
+            );
             let _req = client
                 .post(self.url)
                 .header("Accept", "application/json")
