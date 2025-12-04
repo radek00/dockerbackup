@@ -3,7 +3,10 @@ use std::{
     string::FromUtf8Error,
 };
 
-use crate::backup::notification::{send_notification, Discord, Gotify};
+use crate::backup::{
+    logger::{log, LogLevel},
+    notification::{send_notification, Discord, Gotify},
+};
 
 use super::DockerBackup;
 
@@ -26,7 +29,10 @@ impl BackupError {
                 url: gotify_url,
             })
             .unwrap_or_else(|e| {
-                eprintln!("Error sending gotify notification: {}", e);
+                log(
+                    &format!("Error sending gotify notification: {}", e),
+                    LogLevel::Error,
+                );
             });
         }
 
@@ -37,7 +43,10 @@ impl BackupError {
                 url: dc_url,
             })
             .unwrap_or_else(|e| {
-                eprintln!("Error sending discord notification: {}", e);
+                log(
+                    &format!("Error sending discord notification: {}", e),
+                    LogLevel::Error,
+                );
             });
         }
     }
@@ -93,7 +102,10 @@ impl BackupSuccess {
                 url: gotify_url,
             })
             .unwrap_or_else(|e| {
-                eprintln!("Error sending gotify notification: {}", e);
+                log(
+                    &format!("Error sending gotify notification: {}", e),
+                    LogLevel::Error,
+                );
             });
         }
 
@@ -104,7 +116,10 @@ impl BackupSuccess {
                 url: dc_url,
             })
             .unwrap_or_else(|e| {
-                eprintln!("Error sending discord notification: {}", e);
+                log(
+                    &format!("Error sending discord notification: {}", e),
+                    LogLevel::Error,
+                );
             });
         }
     }
