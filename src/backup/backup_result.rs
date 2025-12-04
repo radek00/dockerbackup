@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::backup::{
-    logger::{log, LogLevel},
+    logger::LogLevel,
     notification::{send_notification, Discord, Gotify},
 };
 
@@ -27,9 +27,10 @@ impl BackupError {
                 message: Some(format!("Backup failed with error: {}", self.message)),
                 success: false,
                 url: gotify_url,
+                logger: &config.logger,
             })
             .unwrap_or_else(|e| {
-                log(
+                config.logger.log(
                     &format!("Error sending gotify notification: {}", e),
                     LogLevel::Error,
                 );
@@ -43,7 +44,7 @@ impl BackupError {
                 url: dc_url,
             })
             .unwrap_or_else(|e| {
-                log(
+                config.logger.log(
                     &format!("Error sending discord notification: {}", e),
                     LogLevel::Error,
                 );
@@ -100,9 +101,10 @@ impl BackupSuccess {
                 message: Some(self.message.clone()),
                 success: true,
                 url: gotify_url,
+                logger: &config.logger,
             })
             .unwrap_or_else(|e| {
-                log(
+                config.logger.log(
                     &format!("Error sending gotify notification: {}", e),
                     LogLevel::Error,
                 );
@@ -116,7 +118,7 @@ impl BackupSuccess {
                 url: dc_url,
             })
             .unwrap_or_else(|e| {
-                log(
+                config.logger.log(
                     &format!("Error sending discord notification: {}", e),
                     LogLevel::Error,
                 );
