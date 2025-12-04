@@ -349,7 +349,7 @@ impl DockerBackup {
                                 self.logger
                                     .reset_cursor_after_timers(self.dest_paths.len() as u16);
                                 self.logger.log(
-                                    "Backup interrputed, press Ctrl+C again to force exit",
+                                    "Backup interrupted, press Ctrl+C again to force exit",
                                     LogLevel::Warning,
                                 );
 
