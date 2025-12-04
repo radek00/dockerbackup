@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{thread, time};
 
-use crate::backup::logger::{log, LogLevel};
+use crate::backup::logger::{LogLevel, Logger};
 
 pub trait Notification {
     fn send_notification(&self) -> Result<(), Box<dyn std::error::Error>>;
@@ -11,6 +11,7 @@ pub struct Gotify<'a> {
     pub message: Option<String>,
     pub url: &'a String,
     pub success: bool,
+    pub logger: &'a Logger,
 }
 
 pub struct Discord<'a> {
@@ -36,7 +37,7 @@ impl<'a> Notification for Gotify<'a> {
         let client = reqwest::blocking::Client::new();
 
         for attempt in 0..10 {
-            log(
+            self.logger.log(
                 &format!("Sending request to Gotify.Attempt {}", attempt),
                 LogLevel::Info,
             );
