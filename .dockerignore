@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Tests
+tests/
+*.test
+
+# Target directory (build artifacts)
+target/
+!target/release/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+.cache/
+
+# Docker
+docker-compose*.yml
+!docker-compose.example.yml
+Dockerfile*
+!Dockerfile
+.dockerignore

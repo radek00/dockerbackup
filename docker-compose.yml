@@ -1,0 +1,76 @@
+services:
+  # Example application with volumes to backup
+  myapp:
+    image: nginx:alpine
+    volumes:
+      - app_data:/usr/share/nginx/html
+      - app_config:/etc/nginx
+    labels:
+      # Exclude this container from backup by adding this label
+      - "dockerbackup.exclude=false"
+
+  # Another example app that will be excluded from backup
+  cache:
+    image: redis:alpine
+    volumes:
+      - cache_data:/data
+    labels:
+      # Exclude this container from backup
+      - "dockerbackup.exclude=true"
+
+  # Docker Backup Service
+  dockerbackup:
+    build: .
+    # Alternative: use pre-built image
+    # image: dockerbackup:latest
+    user: "1000:10000"
+    volumes:
+      # Mount Docker socket for container management
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      
+      # Mount all volumes you want to backup to /volumes/<volume_name>
+      # Each volume gets mounted to the same path structure
+      - app_data:/volumes/app_data:ro
+      - app_config:/volumes/app_config:ro
+      - cache_data:/volumes/cache_data:ro
+      
+      # Option 1: Local backup destination
+      - ./backups:/backup
+      
+      # Option 2: SSH configuration for remote backups
+      # Uncomment the line below and configure SSH_DESTINATION
+      # - ~/.ssh:/ssh:ro
+    
+    environment:
+      # Backup destinations (space-separated for multiple destinations)
+      # For local: /backup (default)
+      # For SSH: user@host:/remote/path,unix (or ,windows for Windows targets)
+      # Example with multiple: "/backup user@server1:/backups,unix user@server2:/backups,windows"
+      DESTINATION: /backup
+      
+      # Exclude specific containers by name (space-separated)
+      # Note: Label-based exclusion (dockerbackup.exclude=true) is handled automatically
+      EXCLUDED_CONTAINERS: ""
+      
+      # Exclude specific volumes by name (space-separated)
+      EXCLUDED_VOLUMES: "cache_data"
+      
+      # Optional: Gotify notification URL
+      GOTIFY_URL: ""
+      
+      # Optional: Discord webhook URL
+      DISCORD_URL: ""
+    
+    # Run backup on schedule using cron or external scheduler
+    # For one-time backup, use: docker-compose run --rm dockerbackup
+    # For scheduled backups, use a cron job or a tool like ofelia
+    restart: "no"
+    
+    depends_on:
+      - myapp
+      - cache
+
+volumes:
+  app_data:
+  app_config:
+  cache_data:
