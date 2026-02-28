@@ -1,10 +1,5 @@
 FROM rust:1.93.1-bookworm AS builder
 
-RUN apt-get update && apt-get install -y \
-    perl \
-    make \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock* ./
@@ -19,8 +14,6 @@ RUN apt-get update && apt-get install -y \
     docker.io \
     openssh-client \
     rsync \
-    tar \
-    gzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user for running the backup
@@ -52,19 +45,6 @@ if [ -d "/ssh" ] && [ "$(ls -A /ssh 2>/dev/null)" ]; then
     chmod 700 "$USER_HOME/.ssh"
 
     find "$USER_HOME/.ssh" -type f -exec chmod 600 {} \;
-    
-    # known_hosts can be more permissive (644) since it only contains public data
-    # 6 = read/write for owner
-    # 4 = read-only for group
-    # 4 = read-only for others
-    # This is optional, 600 also works fine
-    if [ -f "$USER_HOME/.ssh/known_hosts" ]; then
-        chmod 644 "$USER_HOME/.ssh/known_hosts"
-    fi
-    
-    # Public keys (.pub files) can also be 644 since they're meant to be shared
-    # But 600 is also fine and often preferred for consistency
-    find "$USER_HOME/.ssh" -name "*.pub" -exec chmod 644 {} \; 2>/dev/null || true
     
     echo "SSH configuration ready"
 fi
