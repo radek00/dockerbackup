@@ -13,8 +13,7 @@ FROM debian:trixie-20260223-slim
 RUN apt-get update && apt-get install -y \
     docker.io \
     openssh-client \
-    rsync \
-    && rm -rf /var/lib/apt/lists/*
+    rsync
 
 # Create a non-root user for running the backup
 # Remember to set the same UID as the host user
