@@ -1,4 +1,4 @@
-FROM rust:1.93.1-bookworm AS builder
+FROM rust:1.93.1-trixie AS builder
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ COPY src ./src
 
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:trixie-20260223-slim
 
 RUN apt-get update && apt-get install -y \
     docker.io \
