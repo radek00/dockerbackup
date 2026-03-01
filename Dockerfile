@@ -24,7 +24,7 @@ RUN useradd -u 10000 -m -s /bin/bash dockerbackup
 # /volumes - mount point for Docker volumes to backup
 # /backup - local backup destination (if not using SSH)
 # /ssh - optional SSH configuration directory
-RUN mkdir -p /volumes /backup /ssh && \
+RUN mkdir -p /volumes/backingFsBlockDev /backup /ssh && \
     chown 10000:10000 /volumes /backup /ssh
 
 WORKDIR /app
@@ -88,7 +88,6 @@ ENV EXCLUDED_CONTAINERS="" \
     GOTIFY_URL="" \
     DISCORD_URL=""
 
-VOLUME ["/volumes", "/backup", "/ssh"]
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
