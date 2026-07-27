@@ -5,7 +5,6 @@ use clap::ArgAction;
 use crossterm::style::Color;
 use std::collections::HashSet;
 use std::io::{stdout, BufReader, Read};
-use std::path::PathBuf;
 use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
@@ -13,7 +12,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, check_running_containers, get_elapsed_time, get_volumes_size, handle_containers,
-    parse_destination_path,
+    list_backup_volumes, parse_destination_path,
 };
 
 use crate::backup::destination::BackupDestination;
@@ -51,7 +50,6 @@ impl TargetOs {
 pub struct DockerBackup {
     dest_paths: Vec<Arc<dyn BackupDestination>>,
     new_dir: String,
-    volume_path: PathBuf,
     excluded_containers: Vec<String>,
     excluded_volumes: Vec<String>,
     gotify_url: Option<String>,
@@ -59,6 +57,7 @@ pub struct DockerBackup {
     receiver: Option<Receiver<Result<String, BackupError>>>,
     sender: Option<Sender<Result<String, BackupError>>>,
     logger: Arc<Logger>,
+    temp_containers: Arc<Mutex<HashSet<String>>>,
 }
 
 impl DockerBackup {
@@ -83,12 +82,6 @@ impl DockerBackup {
                 .value_parser(parse_destination_path)
                 .short('d')
             .long("destination"))
-            .arg(clap::Arg::new("volume_path")
-                .help("Path to docker volumes directory")
-                .value_parser(clap::value_parser!(PathBuf))
-                .default_value("/var/lib/docker/volumes")
-                .required(false)
-                .long("volumes"))
             .arg(clap::Arg::new("excluded_containers")
                 .help("Containers to exclude from backup")
                 .required(false)
@@ -119,15 +112,12 @@ impl DockerBackup {
             None => Vec::new(),
         };
 
-        excluded_volumes.push("backingFsBlockDev".to_string());
-
         DockerBackup {
             dest_paths: matches
                 .remove_many::<Arc<dyn BackupDestination>>("dest_path")
                 .unwrap()
                 .collect(),
             new_dir,
-            volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
             excluded_containers,
             excluded_volumes,
             gotify_url: matches.remove_one::<String>("gotify_url"),
@@ -135,6 +125,7 @@ impl DockerBackup {
             receiver: None,
             sender: None,
             logger: Arc::new(Logger::new(stdout())),
+            temp_containers: Arc::new(Mutex::new(HashSet::new())),
         }
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
@@ -153,6 +144,7 @@ impl DockerBackup {
 
         let sender_clone = sender.clone();
         let logger_ctrlc = Arc::clone(&self.logger);
+        let temp_containers_ctrlc = Arc::clone(&self.temp_containers);
         ctrlc::set_handler(move || {
             if call_count == 0 {
                 sender_clone
@@ -161,6 +153,7 @@ impl DockerBackup {
 
                 call_count += 1;
             } else {
+                cleanup_temp_containers(&temp_containers_ctrlc, &logger_ctrlc);
                 logger_ctrlc.log("Forcing exit...", LogLevel::Warning);
                 exit(1);
             }
@@ -201,7 +194,15 @@ impl DockerBackup {
         self.logger.log("Backup started...", LogLevel::Info);
         let mut results: Vec<Result<BackupSuccess, BackupError>> = Vec::new();
 
-        let total_size = match get_volumes_size(&self.volume_path, &self.excluded_volumes) {
+        let volumes = match list_backup_volumes(&self.excluded_volumes) {
+            Ok(volumes) => volumes,
+            Err(err) => {
+                results.push(Err(err));
+                return results;
+            }
+        };
+
+        let total_size = match get_volumes_size(&volumes) {
             Ok(size) => size,
             Err(err) => {
                 results.push(Err(err));
@@ -230,10 +231,13 @@ impl DockerBackup {
                 continue;
             }
 
-            match dest.spawn_backup(&self.volume_path, &self.excluded_volumes, &self.new_dir) {
-                Ok(child) => {
+            match dest.spawn_backup(&volumes, &self.new_dir) {
+                Ok(spawned_backup) => {
+                    if let Ok(mut container_set) = self.temp_containers.lock() {
+                        container_set.insert(spawned_backup.temp_container_name);
+                    }
                     backup_handles.push((
-                        Arc::new(Mutex::new(child)),
+                        Arc::new(Mutex::new(spawned_backup.child)),
                         format!("Backup to destination {}", dest.get_display_name()),
                     ));
                 }
@@ -346,6 +350,7 @@ impl DockerBackup {
                                         );
                                     }
                                 }
+                                cleanup_temp_containers(&self.temp_containers, &self.logger);
                                 self.logger
                                     .reset_cursor_after_timers(self.dest_paths.len() as u16);
                                 self.logger.log(
@@ -379,6 +384,28 @@ impl DockerBackup {
                     continue;
                 }
             }
+        }
+    }
+}
+
+fn cleanup_temp_containers(temp_containers: &Arc<Mutex<HashSet<String>>>, logger: &Logger) {
+    let containers: Vec<String> = match temp_containers.lock() {
+        Ok(container_set) => container_set.iter().cloned().collect(),
+        Err(_) => {
+            logger.log("Failed to acquire temp container lock", LogLevel::Warning);
+            return;
+        }
+    };
+
+    for container in containers {
+        if let Err(err) = std::process::Command::new("docker")
+            .args(["rm", "-f", &container])
+            .status()
+        {
+            logger.log(
+                &format!("Failed to remove temp container {}: {}", container, err),
+                LogLevel::Warning,
+            );
         }
     }
 }

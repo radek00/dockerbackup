@@ -1,8 +1,8 @@
 use std::{
-    collections::HashSet,
-    fs,
     path::Path,
     process::{Child, Command, Stdio},
+    thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::backup::{backup_result::BackupError, TargetOs};
@@ -17,6 +17,12 @@ pub struct SshDestination {
     pub host: String,
     pub path: String,
     pub target_os: TargetOs,
+}
+
+#[derive(Debug)]
+pub struct SpawnedBackup {
+    pub child: Child,
+    pub temp_container_name: String,
 }
 
 pub trait BackupDestination: std::fmt::Debug + Send + Sync {
@@ -38,10 +44,9 @@ pub trait BackupDestination: std::fmt::Debug + Send + Sync {
     fn prepare(&self, new_dir: &str) -> Result<(), BackupError>;
     fn spawn_backup(
         &self,
-        volume_path: &Path,
-        excluded_volumes: &[String],
+        volumes: &[String],
         new_dir: &str,
-    ) -> Result<Child, BackupError>;
+    ) -> Result<SpawnedBackup, BackupError>;
     fn get_display_name(&self) -> String;
 }
 
@@ -85,23 +90,40 @@ impl BackupDestination for LocalDestination {
 
     fn spawn_backup(
         &self,
-        volume_path: &Path,
-        excluded_volumes: &[String],
+        volumes: &[String],
         new_dir: &str,
-    ) -> Result<Child, BackupError> {
-        let mut rsync = Command::new("rsync");
+    ) -> Result<SpawnedBackup, BackupError> {
+        let temp_container_name = build_temp_container_name("local", new_dir);
+        let backup_dir = Path::new(&self.path).join(new_dir);
 
-        exclude_volumes(&mut rsync, excluded_volumes, volume_path)?;
+        let mut docker = Command::new("docker");
+        docker
+            .arg("run")
+            .arg("--rm")
+            .arg("--name")
+            .arg(&temp_container_name);
 
-        let exec_rsync = rsync
-            .arg("-aW")
-            .arg(volume_path)
-            .arg(Path::new(&self.path).join(new_dir))
+        for volume in volumes {
+            docker
+                .arg("-v")
+                .arg(format!("{}:/data/{}:ro", volume, volume));
+        }
+
+        let child = docker
+            .arg("-v")
+            .arg(format!("{}:/backup", backup_dir.display()))
+            .arg("alpine")
+            .arg("sh")
+            .arg("-c")
+            .arg("tar -cf /backup/backup.tar -C /data .")
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| BackupError::new(&format!("Failed to spawn rsync: {}", e)))?;
+            .map_err(|e| BackupError::new(&format!("Failed to spawn docker backup container: {}", e)))?;
 
-        Ok(exec_rsync)
+        Ok(SpawnedBackup {
+            child,
+            temp_container_name,
+        })
     }
 
     fn get_display_name(&self) -> String {
@@ -174,39 +196,79 @@ impl BackupDestination for SshDestination {
 
     fn spawn_backup(
         &self,
-        volume_path: &Path,
-        excluded_volumes: &[String],
+        volumes: &[String],
         new_dir: &str,
-    ) -> Result<Child, BackupError> {
-        let mut tar_volumes = Command::new("tar");
+    ) -> Result<SpawnedBackup, BackupError> {
+        let temp_container_name = build_temp_container_name("ssh", new_dir);
 
-        tar_volumes.arg("-cf-").arg("-C").arg(volume_path);
+        let mut docker = Command::new("docker");
+        docker
+            .arg("run")
+            .arg("--rm")
+            .arg("--name")
+            .arg(&temp_container_name);
 
-        exclude_volumes(&mut tar_volumes, excluded_volumes, volume_path)?;
+        for volume in volumes {
+            docker
+                .arg("-v")
+                .arg(format!("{}:/data/{}:ro", volume, volume));
+        }
 
-        let tar_exec = tar_volumes
-            .arg(".")
+        let mut docker_exec = docker
+            .arg("alpine")
+            .arg("sh")
+            .arg("-c")
+            .arg("tar -cf - -C /data .")
             .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| BackupError::new(&format!("Failed to spawn tar: {}", e)))?;
+            .map_err(|e| BackupError::new(&format!("Failed to spawn docker backup container: {}", e)))?;
 
         let dest_path = append_to_path(&self.path, new_dir, &self.target_os);
 
-        let ssh = Command::new("ssh")
+        let remote_command = match self.target_os {
+            TargetOs::Unix => {
+                let escaped_dest_path = escape_for_single_quotes(&dest_path);
+                format!(
+                    "mkdir -p '{0}' && cat > '{0}/backup.tar'",
+                    escaped_dest_path
+                )
+            }
+            TargetOs::Windows => {
+                let escaped_dest_path = escape_for_powershell_single_quotes(&dest_path);
+                let escaped_archive_path = escape_for_powershell_single_quotes(&append_to_path(
+                    &dest_path,
+                    "backup.tar",
+                    &self.target_os,
+                ));
+                format!(
+                    "powershell -NoProfile -Command \"$dir='{0}'; $file='{1}'; New-Item -ItemType Directory -Path $dir -Force | Out-Null; $stdin=[Console]::OpenStandardInput(); $out=[System.IO.File]::Open($file,[System.IO.FileMode]::Create,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None); try {{ $stdin.CopyTo($out) }} finally {{ $out.Dispose() }}\"",
+                    escaped_dest_path, escaped_archive_path
+                )
+            }
+        };
+
+        let docker_stdout = docker_exec
+            .stdout
+            .take()
+            .ok_or_else(|| BackupError::new("Failed to capture backup stream from docker"))?;
+
+        let child = Command::new("ssh")
             .arg(&self.host)
-            .arg("mkdir")
-            .arg(&dest_path)
-            .arg("&&")
-            .arg("tar")
-            .arg("-C")
-            .arg(dest_path)
-            .arg("-xf-")
-            .stdin(Stdio::from(tar_exec.stdout.unwrap()))
+            .arg(remote_command)
+            .stdin(Stdio::from(docker_stdout))
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| BackupError::new(&format!("Failed to spawn ssh: {}", e)))?;
 
-        Ok(ssh)
+        thread::spawn(move || {
+            let _ = docker_exec.wait();
+        });
+
+        Ok(SpawnedBackup {
+            child,
+            temp_container_name,
+        })
     }
 
     fn get_display_name(&self) -> String {
@@ -222,25 +284,18 @@ fn append_to_path(path: &str, new_dir: &str, target_os: &TargetOs) -> String {
     }
 }
 
-fn exclude_volumes(
-    command: &mut Command,
-    dirs_to_exclude: &[String],
-    volume_path: &Path,
-) -> Result<(), BackupError> {
-    let volumes: HashSet<String> = fs::read_dir(volume_path)
-        .map_err(|e| BackupError::new(&format!("Failed to read volume directory: {}", e)))?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().to_str().map(|s| s.to_string()))
-        .collect();
+fn escape_for_single_quotes(value: &str) -> String {
+    value.replace('\'', "'\\''")
+}
 
-    for volume in dirs_to_exclude {
-        if !volumes.iter().any(|x| x.ends_with(volume)) {
-            return Err(BackupError::new(&format!(
-                "Excluded volume '{}' does not exist",
-                volume
-            )));
-        }
-        command.arg(format!("--exclude={}", volume));
-    }
-    Ok(())
+fn escape_for_powershell_single_quotes(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("dockerbackup-{}-{}-{}", prefix, new_dir, timestamp)
 }
