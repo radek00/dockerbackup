@@ -27,7 +27,10 @@ pub struct SpawnedBackup {
 
 pub trait BackupDestination: std::fmt::Debug + Send + Sync {
     fn check_available_space(&self, required_size: u64) -> Result<(), BackupError> {
-        let available_space = self.available_space()?;
+        let available_space = self.available_space().unwrap_or_else(|err| {
+            println!("Failed to check available space, but backup will be attempted anyway: {}", err);
+            u64::MAX
+        });
 
         if available_space < required_size {
             return Err(BackupError::new(&format!(
