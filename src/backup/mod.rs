@@ -307,7 +307,7 @@ impl DockerBackup {
                         if err.message == "Backup interrupted" {
                             for (child_handle, _, container_name) in &backup_handles {
                                 stop_backup_container(container_name, &self.logger);
-                                if let Err(err) = child_handle.0.lock().unwrap().kill() {
+                                if let Err(err) = child_handle.lock().unwrap().kill() {
                                     self.logger.log(
                                         &format!("Error killing process: {:?}", err),
                                         LogLevel::Error,
