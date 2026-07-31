@@ -7,7 +7,10 @@ use std::collections::HashSet;
 use std::io::stdout;
 use std::process::{exit, Child, Command};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
+};
 use std::thread;
 use std::time::Instant;
 use utils::{
@@ -345,18 +348,16 @@ impl DockerBackup {
 }
 
 fn stop_backup_container(container_name: &str, logger: &Logger) {
-    match Command::new("docker")
+    if let Err(err) = Command::new("docker")
         .args(["rm", "-f", container_name])
         .output()
     {
-        Ok(output) => output,
-        Err(err) => {
-            logger.log(
-                &format!("Failed to stop temporary backup container {}: {}", container_name, err),
-                LogLevel::Warning,
-            );
-            return;
-        }
-    };
+        logger.log(
+            &format!(
+                "Failed to stop temporary backup container {}: {}",
+                container_name, err
+            ),
+            LogLevel::Warning,
+        );
+    }
 }
-
