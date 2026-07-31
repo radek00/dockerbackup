@@ -89,7 +89,7 @@ impl DockerBackup {
             Some(excluded_containers) => excluded_containers.collect(),
             None => Vec::new(),
         };
-        let mut excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
+        let excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
             Some(excluded_volumes) => excluded_volumes.collect(),
             None => Vec::new(),
         };
@@ -380,6 +380,7 @@ fn cleanup_temp_containers(temp_containers: &Arc<Mutex<HashSet<String>>>, logger
     };
 
     for container in containers {
+        logger.log(&format!("Removing temporary backup container {}", container), LogLevel::Info);
         if let Err(err) = std::process::Command::new("docker")
             .args(["rm", "-f", &container])
             .status()
