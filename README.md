@@ -25,9 +25,7 @@ Usage: dockerbackup [OPTIONS] --destination <dest_path>...
 
 Options:
   -d, --destination <dest_path>...
-          Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.
-      --volumes <volume_path>
-          Path to docker volumes directory [default: /var/lib/docker/volumes]
+          Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].
       --exclude-containers <excluded_containers>...
           Containers to exclude from backup
       --exclude-volumes <excluded_volumes>...
@@ -41,3 +39,37 @@ Options:
   -V, --version
           Print version
 ```
+
+## Running integration tests
+
+```bash
+cd tests
+
+# Start the test environment (dind, ssh-target, test-runner containers)
+docker compose up -d --build
+
+# Run the test scripts inside test-runner (they must run there, not on the host,
+# since ssh-target is only resolvable on the compose network)
+docker compose exec test-runner bash ./tests/test_script.sh
+docker compose exec test-runner bash ./tests/test_edge_cases.sh
+docker compose exec test-runner bash ./tests/test_container_lifecycle.sh
+docker compose exec test-runner bash ./tests/test_multi_destination.sh
+docker compose exec test-runner bash ./tests/test_interrupt.sh
+
+# Tear down afterwards
+docker compose down -v --remove-orphans
+```
+
+Or simply run all of the above (including setup/teardown) with:
+
+```bash
+cd tests
+./run_tests.sh
+```
+
+Test scripts:
+- `test_script.sh` — full backup+restore happy path (local & SSH destinations) plus space-check failure cases.
+- `test_edge_cases.sh` — nonexistent `--exclude-volumes` entry, destination directory already exists.
+- `test_container_lifecycle.sh` — verifies backed-up containers are stopped and restarted, while excluded containers are left untouched.
+- `test_multi_destination.sh` — multiple simultaneous destinations succeeding together, and a partial-failure scenario (one destination unreachable while others still succeed).
+- `test_interrupt.sh` — Ctrl+C mid-backup, verifying temp container cleanup, container restart, and the interrupted-backup message.

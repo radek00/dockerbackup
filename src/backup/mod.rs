@@ -4,16 +4,18 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use crossterm::style::Color;
 use std::collections::HashSet;
-use std::io::{stdout, BufReader, Read};
-use std::path::PathBuf;
-use std::process::{exit, Child};
+use std::io::stdout;
+use std::process::{exit, Child, Command};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
+};
 use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, check_running_containers, get_elapsed_time, get_volumes_size, handle_containers,
-    parse_destination_path,
+    list_backup_volumes, parse_destination_path,
 };
 
 use crate::backup::destination::BackupDestination;
@@ -30,28 +32,9 @@ type BackupChannel = (
     mpsc::Receiver<Result<String, BackupError>>,
 );
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TargetOs {
-    Unix,
-    Windows,
-}
-
-impl TargetOs {
-    fn from_str(os: &str) -> Result<Self, String> {
-        let os = os.to_lowercase();
-        if os == "windows" {
-            return Ok(TargetOs::Windows);
-        } else if os == "unix" {
-            return Ok(TargetOs::Unix);
-        }
-        Err(String::from("Unsupported os"))
-    }
-}
-
 pub struct DockerBackup {
     dest_paths: Vec<Arc<dyn BackupDestination>>,
     new_dir: String,
-    volume_path: PathBuf,
     excluded_containers: Vec<String>,
     excluded_volumes: Vec<String>,
     gotify_url: Option<String>,
@@ -59,6 +42,7 @@ pub struct DockerBackup {
     receiver: Option<Receiver<Result<String, BackupError>>>,
     sender: Option<Sender<Result<String, BackupError>>>,
     logger: Arc<Logger>,
+    interrupt_requested: Arc<AtomicBool>,
 }
 
 impl DockerBackup {
@@ -76,19 +60,13 @@ impl DockerBackup {
             .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
             .placeholder(AnsiColor::Yellow.on_default()))
             .arg(clap::Arg::new("dest_path")
-                .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.")
+                .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].")
                 .required(true)
                 .num_args(1..)
                 .action(ArgAction::Append)
                 .value_parser(parse_destination_path)
                 .short('d')
             .long("destination"))
-            .arg(clap::Arg::new("volume_path")
-                .help("Path to docker volumes directory")
-                .value_parser(clap::value_parser!(PathBuf))
-                .default_value("/var/lib/docker/volumes")
-                .required(false)
-                .long("volumes"))
             .arg(clap::Arg::new("excluded_containers")
                 .help("Containers to exclude from backup")
                 .required(false)
@@ -114,12 +92,10 @@ impl DockerBackup {
             Some(excluded_containers) => excluded_containers.collect(),
             None => Vec::new(),
         };
-        let mut excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
+        let excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
             Some(excluded_volumes) => excluded_volumes.collect(),
             None => Vec::new(),
         };
-
-        excluded_volumes.push("backingFsBlockDev".to_string());
 
         DockerBackup {
             dest_paths: matches
@@ -127,7 +103,6 @@ impl DockerBackup {
                 .unwrap()
                 .collect(),
             new_dir,
-            volume_path: matches.remove_one::<PathBuf>("volume_path").unwrap(),
             excluded_containers,
             excluded_volumes,
             gotify_url: matches.remove_one::<String>("gotify_url"),
@@ -135,6 +110,7 @@ impl DockerBackup {
             receiver: None,
             sender: None,
             logger: Arc::new(Logger::new(stdout())),
+            interrupt_requested: Arc::new(AtomicBool::new(false)),
         }
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
@@ -153,12 +129,15 @@ impl DockerBackup {
 
         let sender_clone = sender.clone();
         let logger_ctrlc = Arc::clone(&self.logger);
+        let interrupt_requested = Arc::clone(&self.interrupt_requested);
+        let interrupt_requested_ctrlc = Arc::clone(&interrupt_requested);
         ctrlc::set_handler(move || {
             if call_count == 0 {
                 sender_clone
                     .send(Err(BackupError::new("Backup interrupted")))
                     .unwrap();
 
+                interrupt_requested_ctrlc.store(true, Ordering::Relaxed);
                 call_count += 1;
             } else {
                 logger_ctrlc.log("Forcing exit...", LogLevel::Warning);
@@ -201,7 +180,15 @@ impl DockerBackup {
         self.logger.log("Backup started...", LogLevel::Info);
         let mut results: Vec<Result<BackupSuccess, BackupError>> = Vec::new();
 
-        let total_size = match get_volumes_size(&self.volume_path, &self.excluded_volumes) {
+        let volumes = match list_backup_volumes(&self.excluded_volumes) {
+            Ok(volumes) => volumes,
+            Err(err) => {
+                results.push(Err(err));
+                return results;
+            }
+        };
+
+        let total_size = match get_volumes_size(&volumes) {
             Ok(size) => size,
             Err(err) => {
                 results.push(Err(err));
@@ -217,7 +204,7 @@ impl DockerBackup {
             LogLevel::Info,
         );
 
-        let mut backup_handles: Vec<(Arc<Mutex<Child>>, String)> = Vec::new();
+        let mut backup_handles: Vec<(Arc<Mutex<Child>>, String, String)> = Vec::new();
 
         for dest in &self.dest_paths {
             if let Err(err) = dest.check_available_space(total_size) {
@@ -230,11 +217,12 @@ impl DockerBackup {
                 continue;
             }
 
-            match dest.spawn_backup(&self.volume_path, &self.excluded_volumes, &self.new_dir) {
-                Ok(child) => {
+            match dest.spawn_backup(&volumes, &self.new_dir) {
+                Ok(spawned_backup) => {
                     backup_handles.push((
-                        Arc::new(Mutex::new(child)),
+                        Arc::new(Mutex::new(spawned_backup.child)),
                         format!("Backup to destination {}", dest.get_display_name()),
+                        spawned_backup.temp_container_name,
                     ));
                 }
                 Err(err) => {
@@ -254,12 +242,14 @@ impl DockerBackup {
             let sender_clone = sender.clone();
             let handle = handle.clone();
             let logger_clone = Arc::clone(&self.logger);
+            let interrupt_flag = Arc::clone(&self.interrupt_requested);
             let join_handle = thread::spawn(move || {
                 let timer = Instant::now();
-                let stderr = handle.0.lock().unwrap().stderr.take();
-                let mut stderr_reader = stderr.map(BufReader::new);
-                let mut buffer = Vec::new();
                 loop {
+                    if interrupt_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
                     if let Ok(status) = handle.0.lock().unwrap().try_wait() {
                         if let Some(status) = status {
                             if status.success() {
@@ -269,30 +259,6 @@ impl DockerBackup {
                                 );
                                 logger_clone.log_elapsed_time(idx, &msg, Color::Green);
                                 sender_clone.send(Ok(msg)).unwrap();
-                                return;
-                            } else if let Some(reader) = stderr_reader.as_mut() {
-                                match reader.read_to_end(&mut buffer) {
-                                    Ok(_) => {
-                                        let stderr_output = String::from_utf8_lossy(&buffer);
-                                        sender_clone
-                                            .send(Err(BackupError::new(&stderr_output)))
-                                            .unwrap();
-                                        return;
-                                    }
-                                    Err(e) => {
-                                        logger_clone.log(
-                                            &format!("Failed to read stderr: {}", e),
-                                            LogLevel::Error,
-                                        );
-                                        sender_clone
-                                            .send(Err(BackupError::new(&format!(
-                                                "{} backup error",
-                                                handle.1
-                                            ))))
-                                            .unwrap();
-                                        return;
-                                    }
-                                }
                             } else {
                                 sender_clone
                                     .send(Err(BackupError::new(&format!(
@@ -300,19 +266,19 @@ impl DockerBackup {
                                         handle.1
                                     ))))
                                     .unwrap();
-                                return;
                             }
-                        } else {
-                            logger_clone.log_elapsed_time(
-                                idx,
-                                &get_elapsed_time(
-                                    timer,
-                                    format!("\r{} running time", handle.1).as_str(),
-                                ),
-                                Color::Cyan,
-                            );
-                            thread::sleep(std::time::Duration::from_secs(1));
+                            return;
                         }
+
+                        logger_clone.log_elapsed_time(
+                            idx,
+                            &get_elapsed_time(
+                                timer,
+                                format!("\r{} running time", handle.1).as_str(),
+                            ),
+                            Color::Cyan,
+                        );
+                        thread::sleep(std::time::Duration::from_secs(1));
                     }
                 }
             });
@@ -321,64 +287,77 @@ impl DockerBackup {
 
         loop {
             match self.receiver.as_ref().unwrap().try_recv() {
-                Ok(message) => {
-                    match message {
-                        Ok(result) => {
-                            results.push(Ok(BackupSuccess::new(&result)));
-                        }
-                        Err(err) => {
-                            if err.message == "Backup interrupted" {
-                                for handle in backup_handles {
-                                    if let Err(err) = handle.0.lock().unwrap().kill() {
-                                        self.logger.log(
-                                            &format!("Error killing process: {:?}", err),
-                                            LogLevel::Error,
-                                        );
-                                        results
-                                            .push(Err(BackupError::new(err.to_string().as_str())));
-                                    }
+                Ok(message) => match message {
+                    Ok(result) => {
+                        results.push(Ok(BackupSuccess::new(&result)));
+                        if results.len() == self.dest_paths.len() {
+                            self.logger
+                                .reset_cursor_after_timers(self.dest_paths.len() as u16);
+                            self.logger.log("All backups finished", LogLevel::Success);
+                            for join_handle in join_handles {
+                                if let Err(err) = join_handle.join() {
+                                    self.logger.log(
+                                        &format!("Error joining thread: {:?}", err),
+                                        LogLevel::Error,
+                                    );
                                 }
-                                for join_handle in join_handles {
-                                    if let Err(err) = join_handle.join() {
-                                        self.logger.log(
-                                            &format!("Error joining thread: {:?}", err),
-                                            LogLevel::Error,
-                                        );
-                                    }
-                                }
-                                self.logger
-                                    .reset_cursor_after_timers(self.dest_paths.len() as u16);
-                                self.logger.log(
-                                    "Backup interrupted, press Ctrl+C again to force exit",
-                                    LogLevel::Warning,
-                                );
-
-                                results.push(Err(BackupError::new("Backup interrupted")));
-                                return results;
                             }
-                            results.push(Err(err));
+
+                            return results;
                         }
                     }
-                    if results.len() == self.dest_paths.len() {
-                        self.logger
-                            .reset_cursor_after_timers(self.dest_paths.len() as u16);
-                        self.logger.log("All backups finished", LogLevel::Success);
-                        for join_handle in join_handles {
-                            if let Err(err) = join_handle.join() {
-                                self.logger.log(
-                                    &format!("Error joining thread: {:?}", err),
-                                    LogLevel::Error,
-                                );
+                    Err(err) => {
+                        if err.message == "Backup interrupted" {
+                            for (child_handle, _, container_name) in &backup_handles {
+                                stop_backup_container(container_name, &self.logger);
+                                if let Err(err) = child_handle.lock().unwrap().kill() {
+                                    self.logger.log(
+                                        &format!("Error killing process: {:?}", err),
+                                        LogLevel::Error,
+                                    );
+                                    results.push(Err(BackupError::new(err.to_string().as_str())));
+                                }
                             }
-                        }
+                            for join_handle in join_handles {
+                                if let Err(err) = join_handle.join() {
+                                    self.logger.log(
+                                        &format!("Error joining thread: {:?}", err),
+                                        LogLevel::Error,
+                                    );
+                                }
+                            }
+                            self.logger
+                                .reset_cursor_after_timers(self.dest_paths.len() as u16);
+                            self.logger.log(
+                                "Backup interrupted, press Ctrl+C again to force exit",
+                                LogLevel::Warning,
+                            );
 
-                        return results;
+                            results.push(Err(BackupError::new("Backup interrupted")));
+                            return results;
+                        }
+                        results.push(Err(err));
                     }
-                }
+                },
                 Err(_) => {
-                    continue;
+                    thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
         }
+    }
+}
+
+fn stop_backup_container(container_name: &str, logger: &Logger) {
+    if let Err(err) = Command::new("docker")
+        .args(["rm", "-f", container_name])
+        .output()
+    {
+        logger.log(
+            &format!(
+                "Failed to stop temporary backup container {}: {}",
+                container_name, err
+            ),
+            LogLevel::Warning,
+        );
     }
 }

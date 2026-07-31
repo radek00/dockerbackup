@@ -126,3 +126,44 @@ impl BackupSuccess {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn displays_error_message() {
+        let err = BackupError::new("something went wrong");
+        assert_eq!(err.to_string(), "something went wrong");
+    }
+
+    #[test]
+    fn converts_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let err: BackupError = io_err.into();
+        assert_eq!(err.message, "file missing");
+    }
+
+    #[test]
+    fn converts_from_utf8_error() {
+        let invalid_utf8 = vec![0, 159, 146, 150];
+        let utf8_err = String::from_utf8(invalid_utf8).unwrap_err();
+        let err: BackupError = utf8_err.into();
+        assert!(!err.message.is_empty());
+    }
+
+    #[test]
+    fn default_error_has_fallback_message() {
+        let err = BackupError::default();
+        assert_eq!(
+            err.message,
+            "An error occurred while parsing the HTTP request"
+        );
+    }
+
+    #[test]
+    fn backup_success_stores_message() {
+        let success = BackupSuccess::new("Backup to destination /tmp completed");
+        assert_eq!(success.message, "Backup to destination /tmp completed");
+    }
+}
