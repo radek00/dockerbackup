@@ -5,7 +5,7 @@ use clap::ArgAction;
 use crossterm::style::Color;
 use std::collections::HashSet;
 use std::io::stdout;
-use std::process::{exit, Child};
+use std::process::{exit, Child, Command};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc, Mutex};
 use std::thread;
@@ -201,7 +201,7 @@ impl DockerBackup {
             LogLevel::Info,
         );
 
-        let mut backup_handles: Vec<(Arc<Mutex<Child>>, String)> = Vec::new();
+        let mut backup_handles: Vec<(Arc<Mutex<Child>>, String, String)> = Vec::new();
 
         for dest in &self.dest_paths {
             if let Err(err) = dest.check_available_space(total_size) {
@@ -219,6 +219,7 @@ impl DockerBackup {
                     backup_handles.push((
                         Arc::new(Mutex::new(spawned_backup.child)),
                         format!("Backup to destination {}", dest.get_display_name()),
+                        spawned_backup.temp_container_name,
                     ));
                 }
                 Err(err) => {
@@ -304,8 +305,9 @@ impl DockerBackup {
                     }
                     Err(err) => {
                         if err.message == "Backup interrupted" {
-                            for handle in backup_handles {
-                                if let Err(err) = handle.0.lock().unwrap().kill() {
+                            for (child_handle, _, container_name) in &backup_handles {
+                                stop_backup_container(container_name, &self.logger);
+                                if let Err(err) = child_handle.0.lock().unwrap().kill() {
                                     self.logger.log(
                                         &format!("Error killing process: {:?}", err),
                                         LogLevel::Error,
@@ -340,5 +342,21 @@ impl DockerBackup {
             }
         }
     }
+}
+
+fn stop_backup_container(container_name: &str, logger: &Logger) {
+    match Command::new("docker")
+        .args(["rm", "-f", container_name])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            logger.log(
+                &format!("Failed to stop temporary backup container {}: {}", container_name, err),
+                LogLevel::Warning,
+            );
+            return;
+        }
+    };
 }
 
