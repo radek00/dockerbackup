@@ -26,8 +26,6 @@ Usage: dockerbackup [OPTIONS] --destination <dest_path>...
 Options:
   -d, --destination <dest_path>...
           Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].
-      --volumes <volume_path>
-          Path to docker volumes directory [default: /var/lib/docker/volumes]
       --exclude-containers <excluded_containers>...
           Containers to exclude from backup
       --exclude-volumes <excluded_volumes>...
@@ -40,4 +38,20 @@ Options:
           Print help
   -V, --version
           Print version
+```
+
+## Running integration tests
+
+```bash
+cd tests
+
+# Start the test environment (dind, ssh-target, test-runner containers)
+docker compose up -d --build
+
+# Run the test script inside test-runner (it must run there, not on the host,
+# since ssh-target is only resolvable on the compose network)
+docker compose exec test-runner bash ./tests/test_script.sh
+
+# Tear down afterwards
+docker compose down -v --remove-orphans
 ```
