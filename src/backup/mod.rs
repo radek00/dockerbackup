@@ -4,10 +4,10 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use crossterm::style::Color;
 use std::collections::HashSet;
-use std::io::{stdout, BufReader, Read};
+use std::io::stdout;
 use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use utils::{
@@ -40,6 +40,7 @@ pub struct DockerBackup {
     sender: Option<Sender<Result<String, BackupError>>>,
     logger: Arc<Logger>,
     temp_containers: Arc<Mutex<HashSet<String>>>,
+    interrupt_requested: Arc<AtomicBool>,
 }
 
 impl DockerBackup {
@@ -108,6 +109,7 @@ impl DockerBackup {
             sender: None,
             logger: Arc::new(Logger::new(stdout())),
             temp_containers: Arc::new(Mutex::new(HashSet::new())),
+            interrupt_requested: Arc::new(AtomicBool::new(false)),
         }
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
@@ -127,12 +129,15 @@ impl DockerBackup {
         let sender_clone = sender.clone();
         let logger_ctrlc = Arc::clone(&self.logger);
         let temp_containers_ctrlc = Arc::clone(&self.temp_containers);
+        let interrupt_requested = Arc::clone(&self.interrupt_requested);
+        let interrupt_requested_ctrlc = Arc::clone(&interrupt_requested);
         ctrlc::set_handler(move || {
             if call_count == 0 {
                 sender_clone
                     .send(Err(BackupError::new("Backup interrupted")))
                     .unwrap();
 
+                interrupt_requested_ctrlc.store(true, Ordering::Relaxed);
                 call_count += 1;
             } else {
                 cleanup_temp_containers(&temp_containers_ctrlc, &logger_ctrlc);
@@ -240,12 +245,14 @@ impl DockerBackup {
             let sender_clone = sender.clone();
             let handle = handle.clone();
             let logger_clone = Arc::clone(&self.logger);
+            let interrupt_flag = Arc::clone(&self.interrupt_requested);
             let join_handle = thread::spawn(move || {
                 let timer = Instant::now();
-                let stderr = handle.0.lock().unwrap().stderr.take();
-                let mut stderr_reader = stderr.map(BufReader::new);
-                let mut buffer = Vec::new();
                 loop {
+                    if interrupt_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
                     if let Ok(status) = handle.0.lock().unwrap().try_wait() {
                         if let Some(status) = status {
                             if status.success() {
@@ -255,30 +262,6 @@ impl DockerBackup {
                                 );
                                 logger_clone.log_elapsed_time(idx, &msg, Color::Green);
                                 sender_clone.send(Ok(msg)).unwrap();
-                                return;
-                            } else if let Some(reader) = stderr_reader.as_mut() {
-                                match reader.read_to_end(&mut buffer) {
-                                    Ok(_) => {
-                                        let stderr_output = String::from_utf8_lossy(&buffer);
-                                        sender_clone
-                                            .send(Err(BackupError::new(&stderr_output)))
-                                            .unwrap();
-                                        return;
-                                    }
-                                    Err(e) => {
-                                        logger_clone.log(
-                                            &format!("Failed to read stderr: {}", e),
-                                            LogLevel::Error,
-                                        );
-                                        sender_clone
-                                            .send(Err(BackupError::new(&format!(
-                                                "{} backup error",
-                                                handle.1
-                                            ))))
-                                            .unwrap();
-                                        return;
-                                    }
-                                }
                             } else {
                                 sender_clone
                                     .send(Err(BackupError::new(&format!(
@@ -286,19 +269,19 @@ impl DockerBackup {
                                         handle.1
                                     ))))
                                     .unwrap();
-                                return;
                             }
-                        } else {
-                            logger_clone.log_elapsed_time(
-                                idx,
-                                &get_elapsed_time(
-                                    timer,
-                                    format!("\r{} running time", handle.1).as_str(),
-                                ),
-                                Color::Cyan,
-                            );
-                            thread::sleep(std::time::Duration::from_secs(1));
+                            return;
                         }
+
+                        logger_clone.log_elapsed_time(
+                            idx,
+                            &get_elapsed_time(
+                                timer,
+                                format!("\r{} running time", handle.1).as_str(),
+                            ),
+                            Color::Cyan,
+                        );
+                        thread::sleep(std::time::Duration::from_secs(1));
                     }
                 }
             });
@@ -307,63 +290,60 @@ impl DockerBackup {
 
         loop {
             match self.receiver.as_ref().unwrap().try_recv() {
-                Ok(message) => {
-                    match message {
-                        Ok(result) => {
-                            results.push(Ok(BackupSuccess::new(&result)));
-                        }
-                        Err(err) => {
-                            if err.message == "Backup interrupted" {
-                                for handle in backup_handles {
-                                    if let Err(err) = handle.0.lock().unwrap().kill() {
-                                        self.logger.log(
-                                            &format!("Error killing process: {:?}", err),
-                                            LogLevel::Error,
-                                        );
-                                        results
-                                            .push(Err(BackupError::new(err.to_string().as_str())));
-                                    }
+                Ok(message) => match message {
+                    Ok(result) => {
+                        results.push(Ok(BackupSuccess::new(&result)));
+                        if results.len() == self.dest_paths.len() {
+                            self.logger
+                                .reset_cursor_after_timers(self.dest_paths.len() as u16);
+                            self.logger.log("All backups finished", LogLevel::Success);
+                            for join_handle in join_handles {
+                                if let Err(err) = join_handle.join() {
+                                    self.logger.log(
+                                        &format!("Error joining thread: {:?}", err),
+                                        LogLevel::Error,
+                                    );
                                 }
-                                for join_handle in join_handles {
-                                    if let Err(err) = join_handle.join() {
-                                        self.logger.log(
-                                            &format!("Error joining thread: {:?}", err),
-                                            LogLevel::Error,
-                                        );
-                                    }
-                                }
-                                cleanup_temp_containers(&self.temp_containers, &self.logger);
-                                self.logger
-                                    .reset_cursor_after_timers(self.dest_paths.len() as u16);
-                                self.logger.log(
-                                    "Backup interrupted, press Ctrl+C again to force exit",
-                                    LogLevel::Warning,
-                                );
-
-                                results.push(Err(BackupError::new("Backup interrupted")));
-                                return results;
                             }
-                            results.push(Err(err));
+
+                            return results;
                         }
                     }
-                    if results.len() == self.dest_paths.len() {
-                        self.logger
-                            .reset_cursor_after_timers(self.dest_paths.len() as u16);
-                        self.logger.log("All backups finished", LogLevel::Success);
-                        for join_handle in join_handles {
-                            if let Err(err) = join_handle.join() {
-                                self.logger.log(
-                                    &format!("Error joining thread: {:?}", err),
-                                    LogLevel::Error,
-                                );
+                    Err(err) => {
+                        if err.message == "Backup interrupted" {
+                            for handle in backup_handles {
+                                if let Err(err) = handle.0.lock().unwrap().kill() {
+                                    self.logger.log(
+                                        &format!("Error killing process: {:?}", err),
+                                        LogLevel::Error,
+                                    );
+                                    results.push(Err(BackupError::new(err.to_string().as_str())));
+                                }
                             }
-                        }
+                            for join_handle in join_handles {
+                                if let Err(err) = join_handle.join() {
+                                    self.logger.log(
+                                        &format!("Error joining thread: {:?}", err),
+                                        LogLevel::Error,
+                                    );
+                                }
+                            }
+                            cleanup_temp_containers(&self.temp_containers, &self.logger);
+                            self.logger
+                                .reset_cursor_after_timers(self.dest_paths.len() as u16);
+                            self.logger.log(
+                                "Backup interrupted, press Ctrl+C again to force exit",
+                                LogLevel::Warning,
+                            );
 
-                        return results;
+                            results.push(Err(BackupError::new("Backup interrupted")));
+                            return results;
+                        }
+                        results.push(Err(err));
                     }
-                }
+                },
                 Err(_) => {
-                    continue;
+                    thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
         }
