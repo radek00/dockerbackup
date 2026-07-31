@@ -39,7 +39,6 @@ pub struct DockerBackup {
     receiver: Option<Receiver<Result<String, BackupError>>>,
     sender: Option<Sender<Result<String, BackupError>>>,
     logger: Arc<Logger>,
-    temp_containers: Arc<Mutex<HashSet<String>>>,
     interrupt_requested: Arc<AtomicBool>,
 }
 
@@ -108,7 +107,6 @@ impl DockerBackup {
             receiver: None,
             sender: None,
             logger: Arc::new(Logger::new(stdout())),
-            temp_containers: Arc::new(Mutex::new(HashSet::new())),
             interrupt_requested: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -128,7 +126,6 @@ impl DockerBackup {
 
         let sender_clone = sender.clone();
         let logger_ctrlc = Arc::clone(&self.logger);
-        let temp_containers_ctrlc = Arc::clone(&self.temp_containers);
         let interrupt_requested = Arc::clone(&self.interrupt_requested);
         let interrupt_requested_ctrlc = Arc::clone(&interrupt_requested);
         ctrlc::set_handler(move || {
@@ -140,7 +137,6 @@ impl DockerBackup {
                 interrupt_requested_ctrlc.store(true, Ordering::Relaxed);
                 call_count += 1;
             } else {
-                cleanup_temp_containers(&temp_containers_ctrlc, &logger_ctrlc);
                 logger_ctrlc.log("Forcing exit...", LogLevel::Warning);
                 exit(1);
             }
@@ -220,9 +216,6 @@ impl DockerBackup {
 
             match dest.spawn_backup(&volumes, &self.new_dir) {
                 Ok(spawned_backup) => {
-                    if let Ok(mut container_set) = self.temp_containers.lock() {
-                        container_set.insert(spawned_backup.temp_container_name);
-                    }
                     backup_handles.push((
                         Arc::new(Mutex::new(spawned_backup.child)),
                         format!("Backup to destination {}", dest.get_display_name()),
@@ -328,7 +321,6 @@ impl DockerBackup {
                                     );
                                 }
                             }
-                            cleanup_temp_containers(&self.temp_containers, &self.logger);
                             self.logger
                                 .reset_cursor_after_timers(self.dest_paths.len() as u16);
                             self.logger.log(
@@ -350,25 +342,3 @@ impl DockerBackup {
     }
 }
 
-fn cleanup_temp_containers(temp_containers: &Arc<Mutex<HashSet<String>>>, logger: &Logger) {
-    let containers: Vec<String> = match temp_containers.lock() {
-        Ok(container_set) => container_set.iter().cloned().collect(),
-        Err(_) => {
-            logger.log("Failed to acquire temp container lock", LogLevel::Warning);
-            return;
-        }
-    };
-
-    for container in containers {
-        logger.log(&format!("Removing temporary backup container {}", container), LogLevel::Info);
-        if let Err(err) = std::process::Command::new("docker")
-            .args(["rm", "-f", &container])
-            .status()
-        {
-            logger.log(
-                &format!("Failed to remove temp container {}: {}", container, err),
-                LogLevel::Warning,
-            );
-        }
-    }
-}
