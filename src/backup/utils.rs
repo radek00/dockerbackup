@@ -1,13 +1,8 @@
-use std::{
-    collections::HashSet,
-    path::Path,
-    process::Command,
-    sync::Arc,
-};
+use std::{collections::HashSet, path::Path, process::Command, sync::Arc};
 
 use crate::backup::destination::{BackupDestination, LocalDestination, SshDestination};
 
-use super::{backup_result::BackupError, TargetOs};
+use super::backup_result::BackupError;
 
 pub fn check_docker() -> Result<(), BackupError> {
     let status = Command::new("docker").arg("--version").status()?;
@@ -38,19 +33,11 @@ pub fn handle_containers(containers: &HashSet<&str>, command: &str) -> Result<()
 
 pub fn parse_destination_path(path: &str) -> Result<Arc<dyn BackupDestination>, String> {
     if path.contains('@') {
-        let tuple: Vec<&str> = path.splitn(2, ',').collect();
-        if tuple.len() != 2 {
-            return Err(String::from(
-                "Destination path and target os must be provided",
-            ));
-        }
-
-        let parts: Vec<&str> = tuple[0].splitn(2, ':').collect();
+        let parts: Vec<&str> = path.splitn(2, ':').collect();
         if parts.len() == 2 && parts[0].contains('@') {
             Ok(Arc::new(SshDestination {
                 host: parts[0].to_owned(),
                 path: parts[1].to_owned(),
-                target_os: TargetOs::from_str(tuple[1])?,
             }))
         } else {
             Err(String::from(
@@ -58,7 +45,7 @@ pub fn parse_destination_path(path: &str) -> Result<Arc<dyn BackupDestination>, 
             ))
         }
     } else if Path::new(path).exists() {
-        //local backups work on linux only
+        // local backups work on linux only
         Ok(Arc::new(LocalDestination {
             path: path.to_owned(),
         }))
@@ -102,9 +89,7 @@ pub fn list_backup_volumes(excluded_volumes: &[String]) -> Result<Vec<String>, B
         .collect())
 }
 
-pub fn get_volumes_size(
-    included_volumes: &[String],
-) -> Result<u64, BackupError> {
+pub fn get_volumes_size(included_volumes: &[String]) -> Result<u64, BackupError> {
     if included_volumes.is_empty() {
         return Ok(0);
     }

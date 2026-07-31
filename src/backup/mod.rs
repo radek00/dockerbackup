@@ -29,24 +29,6 @@ type BackupChannel = (
     mpsc::Receiver<Result<String, BackupError>>,
 );
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum TargetOs {
-    Unix,
-    Windows,
-}
-
-impl TargetOs {
-    fn from_str(os: &str) -> Result<Self, String> {
-        let os = os.to_lowercase();
-        if os == "windows" {
-            return Ok(TargetOs::Windows);
-        } else if os == "unix" {
-            return Ok(TargetOs::Unix);
-        }
-        Err(String::from("Unsupported os"))
-    }
-}
-
 pub struct DockerBackup {
     dest_paths: Vec<Arc<dyn BackupDestination>>,
     new_dir: String,
@@ -75,7 +57,7 @@ impl DockerBackup {
             .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
             .placeholder(AnsiColor::Yellow.on_default()))
             .arg(clap::Arg::new("dest_path")
-                .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup, windows]. Target os must be specified with ssh paths.")
+                .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].")
                 .required(true)
                 .num_args(1..)
                 .action(ArgAction::Append)

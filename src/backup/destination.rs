@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::backup::{backup_result::BackupError, TargetOs};
+use crate::backup::backup_result::BackupError;
 
 #[derive(Debug, Clone)]
 pub struct LocalDestination {
@@ -16,7 +16,6 @@ pub struct LocalDestination {
 pub struct SshDestination {
     pub host: String,
     pub path: String,
-    pub target_os: TargetOs,
 }
 
 #[derive(Debug)]
@@ -42,11 +41,8 @@ pub trait BackupDestination: std::fmt::Debug + Send + Sync {
     fn available_space(&self) -> Result<u64, BackupError>;
 
     fn prepare(&self, new_dir: &str) -> Result<(), BackupError>;
-    fn spawn_backup(
-        &self,
-        volumes: &[String],
-        new_dir: &str,
-    ) -> Result<SpawnedBackup, BackupError>;
+    fn spawn_backup(&self, volumes: &[String], new_dir: &str)
+        -> Result<SpawnedBackup, BackupError>;
     fn get_display_name(&self) -> String;
 }
 
@@ -118,7 +114,9 @@ impl BackupDestination for LocalDestination {
             .arg("tar -cf /backup/backup.tar -C /data .")
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| BackupError::new(&format!("Failed to spawn docker backup container: {}", e)))?;
+            .map_err(|e| {
+                BackupError::new(&format!("Failed to spawn docker backup container: {}", e))
+            })?;
 
         Ok(SpawnedBackup {
             child,
@@ -133,61 +131,32 @@ impl BackupDestination for LocalDestination {
 
 impl BackupDestination for SshDestination {
     fn available_space(&self) -> Result<u64, BackupError> {
-        match self.target_os {
-            TargetOs::Unix => {
-                let output = Command::new("ssh")
-                    .arg(&self.host)
-                    .arg("df")
-                    .arg("-B1")
-                    .arg("--output=avail")
-                    .arg(&self.path)
-                    .output()
-                    .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
+        let output = Command::new("ssh")
+            .arg(&self.host)
+            .arg("df")
+            .arg("-B1")
+            .arg("--output=avail")
+            .arg(&self.path)
+            .output()
+            .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
 
-                if !output.status.success() {
-                    return Err(BackupError::new(&format!(
-                        "ssh df command failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )));
-                }
-
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let lines: Vec<&str> = stdout.lines().collect();
-                if lines.len() < 2 {
-                    return Err(BackupError::new("Invalid df output"));
-                }
-
-                lines[1]
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| BackupError::new("Failed to parse available space"))
-            }
-            TargetOs::Windows => {
-                let ps_command = format!(
-                "powershell -Command \"Get-Volume -FilePath '{}' | Select-Object -ExpandProperty SizeRemaining\"",
-                self.path
-            );
-
-                let output = Command::new("ssh")
-                    .arg(&self.host)
-                    .arg(ps_command)
-                    .output()
-                    .map_err(|e| BackupError::new(&format!("Failed to execute ssh: {}", e)))?;
-
-                if !output.status.success() {
-                    return Err(BackupError::new(&format!(
-                        "ssh powershell command failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )));
-                }
-
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| BackupError::new("Failed to parse available space"))
-            }
+        if !output.status.success() {
+            return Err(BackupError::new(&format!(
+                "ssh df command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = stdout.lines().collect();
+        if lines.len() < 2 {
+            return Err(BackupError::new("Invalid df output"));
+        }
+
+        lines[1]
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| BackupError::new("Failed to parse available space"))
     }
 
     fn prepare(&self, _new_dir: &str) -> Result<(), BackupError> {
@@ -222,31 +191,16 @@ impl BackupDestination for SshDestination {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| BackupError::new(&format!("Failed to spawn docker backup container: {}", e)))?;
+            .map_err(|e| {
+                BackupError::new(&format!("Failed to spawn docker backup container: {}", e))
+            })?;
 
-        let dest_path = append_to_path(&self.path, new_dir, &self.target_os);
-
-        let remote_command = match self.target_os {
-            TargetOs::Unix => {
-                let escaped_dest_path = escape_for_single_quotes(&dest_path);
-                format!(
-                    "mkdir -p '{0}' && cat > '{0}/backup.tar'",
-                    escaped_dest_path
-                )
-            }
-            TargetOs::Windows => {
-                let escaped_dest_path = escape_for_powershell_single_quotes(&dest_path);
-                let escaped_archive_path = escape_for_powershell_single_quotes(&append_to_path(
-                    &dest_path,
-                    "backup.tar",
-                    &self.target_os,
-                ));
-                format!(
-                    "powershell -NoProfile -Command \"$dir='{0}'; $file='{1}'; New-Item -ItemType Directory -Path $dir -Force | Out-Null; $stdin=[Console]::OpenStandardInput(); $out=[System.IO.File]::Open($file,[System.IO.FileMode]::Create,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None); try {{ $stdin.CopyTo($out) }} finally {{ $out.Dispose() }}\"",
-                    escaped_dest_path, escaped_archive_path
-                )
-            }
-        };
+        let dest_path = format!("{}/{}", self.path, new_dir);
+        let escaped_dest_path = escape_for_single_quotes(&dest_path);
+        let remote_command = format!(
+            "mkdir -p '{0}' && cat > '{0}/backup.tar'",
+            escaped_dest_path
+        );
 
         let docker_stdout = docker_exec
             .stdout
@@ -276,20 +230,8 @@ impl BackupDestination for SshDestination {
     }
 }
 
-fn append_to_path(path: &str, new_dir: &str, target_os: &TargetOs) -> String {
-    if target_os == &TargetOs::Windows {
-        format!("{}\\{}", path, new_dir)
-    } else {
-        format!("{}/{}", path, new_dir)
-    }
-}
-
 fn escape_for_single_quotes(value: &str) -> String {
     value.replace('\'', "'\\''")
-}
-
-fn escape_for_powershell_single_quotes(value: &str) -> String {
-    value.replace('\'', "''")
 }
 
 fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
