@@ -241,3 +241,23 @@ fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
         .as_nanos();
     format!("dockerbackup-{}-{}-{}", prefix, new_dir, timestamp)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escapes_single_quotes_for_shell() {
+        assert_eq!(escape_for_single_quotes("it's a test"), "it'\\''s a test");
+        assert_eq!(escape_for_single_quotes("no quotes here"), "no quotes here");
+    }
+
+    #[test]
+    fn builds_unique_temp_container_names() {
+        let first = build_temp_container_name("local", "2026-1-1");
+        let second = build_temp_container_name("local", "2026-1-1");
+
+        assert!(first.starts_with("dockerbackup-local-2026-1-1-"));
+        assert_ne!(first, second);
+    }
+}

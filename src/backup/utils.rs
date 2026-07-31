@@ -136,3 +136,39 @@ pub fn get_elapsed_time(start: std::time::Instant, description: &str) -> String 
         elapsed.as_secs() % 60
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_valid_ssh_destination() {
+        let dest = parse_destination_path("user@host:/backup/path").unwrap();
+        assert_eq!(dest.get_display_name(), "user@host:/backup/path");
+    }
+
+    #[test]
+    fn rejects_ssh_destination_without_colon() {
+        let err = parse_destination_path("user@host").unwrap_err();
+        assert_eq!(err, "SSH path must be in the format user@host:path");
+    }
+
+    #[test]
+    fn parses_valid_existing_local_path() {
+        let dest = parse_destination_path(".").unwrap();
+        assert_eq!(dest.get_display_name(), ".");
+    }
+
+    #[test]
+    fn rejects_nonexistent_local_path() {
+        let err = parse_destination_path("/path/that/does/not/exist/hopefully").unwrap_err();
+        assert_eq!(err, "Local path does not exist");
+    }
+
+    #[test]
+    fn formats_elapsed_time() {
+        let start = std::time::Instant::now();
+        let message = get_elapsed_time(start, "Backup finished");
+        assert!(message.starts_with("Backup finished: 00:00:0"));
+    }
+}
