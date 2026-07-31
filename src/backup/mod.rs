@@ -8,7 +8,7 @@ use std::io::{stdout, BufReader, Read};
 use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use utils::{
     check_docker, check_running_containers, get_elapsed_time, get_volumes_size, handle_containers,
@@ -27,6 +27,12 @@ mod utils;
 type BackupChannel = (
     mpsc::Sender<Result<String, BackupError>>,
     mpsc::Receiver<Result<String, BackupError>>,
+);
+
+type BackupHandle = (
+    Arc<Mutex<Child>>,
+    String,
+    Option<JoinHandle<Result<(), BackupError>>>,
 );
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -218,7 +224,8 @@ impl DockerBackup {
             LogLevel::Info,
         );
 
-        let mut backup_handles: Vec<(Arc<Mutex<Child>>, String)> = Vec::new();
+        // (child, label, optional docker/tar producer join handle)
+        let mut backup_handles: Vec<BackupHandle> = Vec::new();
 
         for dest in &self.dest_paths {
             if let Err(err) = dest.check_available_space(total_size) {
@@ -239,6 +246,7 @@ impl DockerBackup {
                     backup_handles.push((
                         Arc::new(Mutex::new(spawned_backup.child)),
                         format!("Backup to destination {}", dest.get_display_name()),
+                        spawned_backup.producer,
                     ));
                 }
                 Err(err) => {
@@ -253,70 +261,112 @@ impl DockerBackup {
 
         let sender = self.sender.as_ref().unwrap();
         let mut join_handles: Vec<thread::JoinHandle<()>> = Vec::new();
+        // Keep child Arcs so Ctrl+C can still kill in-flight transfer processes.
+        let mut kill_handles: Vec<Arc<Mutex<Child>>> = Vec::new();
 
-        for (idx, handle) in backup_handles.iter().enumerate() {
+        for (idx, (child, label, producer)) in backup_handles.into_iter().enumerate() {
+            kill_handles.push(Arc::clone(&child));
             let sender_clone = sender.clone();
-            let handle = handle.clone();
             let logger_clone = Arc::clone(&self.logger);
             let join_handle = thread::spawn(move || {
                 let timer = Instant::now();
-                let stderr = handle.0.lock().unwrap().stderr.take();
+                let stderr = child.lock().unwrap().stderr.take();
                 let mut stderr_reader = stderr.map(BufReader::new);
                 let mut buffer = Vec::new();
-                loop {
-                    if let Ok(status) = handle.0.lock().unwrap().try_wait() {
-                        if let Some(status) = status {
+                let transfer_result = loop {
+                    match child.lock().unwrap().try_wait() {
+                        Ok(Some(status)) => {
                             if status.success() {
-                                let msg = get_elapsed_time(
-                                    timer,
-                                    format!("{} completed successfully in", handle.1).as_str(),
-                                );
-                                logger_clone.log_elapsed_time(idx, &msg, Color::Green);
-                                sender_clone.send(Ok(msg)).unwrap();
-                                return;
-                            } else if let Some(reader) = stderr_reader.as_mut() {
+                                break Ok(());
+                            }
+
+                            let detail = if let Some(reader) = stderr_reader.as_mut() {
                                 match reader.read_to_end(&mut buffer) {
                                     Ok(_) => {
                                         let stderr_output = String::from_utf8_lossy(&buffer);
-                                        sender_clone
-                                            .send(Err(BackupError::new(&stderr_output)))
-                                            .unwrap();
-                                        return;
+                                        let trimmed = stderr_output.trim();
+                                        if trimmed.is_empty() {
+                                            format!("{} failed with status {}", label, status)
+                                        } else {
+                                            trimmed.to_string()
+                                        }
                                     }
                                     Err(e) => {
                                         logger_clone.log(
                                             &format!("Failed to read stderr: {}", e),
                                             LogLevel::Error,
                                         );
-                                        sender_clone
-                                            .send(Err(BackupError::new(&format!(
-                                                "{} backup error",
-                                                handle.1
-                                            ))))
-                                            .unwrap();
-                                        return;
+                                        format!(
+                                            "{} failed with status {} (also failed reading stderr: {})",
+                                            label, status, e
+                                        )
                                     }
                                 }
                             } else {
-                                sender_clone
-                                    .send(Err(BackupError::new(&format!(
-                                        "{} backup error",
-                                        handle.1
-                                    ))))
-                                    .unwrap();
-                                return;
-                            }
-                        } else {
+                                format!("{} failed with status {}", label, status)
+                            };
+                            break Err(BackupError::new(&detail));
+                        }
+                        Ok(None) => {
                             logger_clone.log_elapsed_time(
                                 idx,
                                 &get_elapsed_time(
                                     timer,
-                                    format!("\r{} running time", handle.1).as_str(),
+                                    format!("\r{} running time", label).as_str(),
                                 ),
                                 Color::Cyan,
                             );
                             thread::sleep(std::time::Duration::from_secs(1));
                         }
+                        Err(e) => {
+                            break Err(BackupError::new(&format!(
+                                "Failed to wait for {}: {}",
+                                label, e
+                            )));
+                        }
+                    }
+                };
+
+                // Join docker/tar producer after the transfer child exits so its
+                // failure is never discarded (e.g. tar dies while ssh still exits 0).
+                let producer_result = match producer {
+                    Some(handle) => match handle.join() {
+                        Ok(result) => result,
+                        Err(_) => Err(BackupError::new(&format!(
+                            "{}: backup producer thread panicked",
+                            label
+                        ))),
+                    },
+                    None => Ok(()),
+                };
+
+                match (transfer_result, producer_result) {
+                    (Ok(()), Ok(())) => {
+                        let msg = get_elapsed_time(
+                            timer,
+                            format!("{} completed successfully in", label).as_str(),
+                        );
+                        logger_clone.log_elapsed_time(idx, &msg, Color::Green);
+                        sender_clone.send(Ok(msg)).unwrap();
+                    }
+                    (Err(transfer_err), Ok(())) => {
+                        sender_clone.send(Err(transfer_err)).unwrap();
+                    }
+                    (Ok(()), Err(producer_err)) => {
+                        sender_clone
+                            .send(Err(BackupError::new(&format!(
+                                "{}: {}",
+                                label, producer_err
+                            ))))
+                            .unwrap();
+                    }
+                    (Err(transfer_err), Err(producer_err)) => {
+                        sender_clone
+                            .send(Err(BackupError::new(&format!(
+                                "{}; producer: {}",
+                                transfer_err, producer_err
+                            ))))
+                            .unwrap();
                     }
                 }
             });
@@ -332,8 +382,8 @@ impl DockerBackup {
                         }
                         Err(err) => {
                             if err.message == "Backup interrupted" {
-                                for handle in backup_handles {
-                                    if let Err(err) = handle.0.lock().unwrap().kill() {
+                                for handle in &kill_handles {
+                                    if let Err(err) = handle.lock().unwrap().kill() {
                                         self.logger.log(
                                             &format!("Error killing process: {:?}", err),
                                             LogLevel::Error,
