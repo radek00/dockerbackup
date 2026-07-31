@@ -1,9 +1,12 @@
 use std::{
+    io::Read,
     path::Path,
     process::{Child, Command, Stdio},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 use crate::backup::{backup_result::BackupError, TargetOs};
 
@@ -237,17 +240,12 @@ impl BackupDestination for SshDestination {
                     escaped_dest_path
                 )
             }
+            // Windows OpenSSH runs commands through cmd.exe. Any unquoted '|' in
+            // -Command is treated as a cmd pipe, so only New-Item runs and the
+            // process never reads stdin. Use -EncodedCommand to avoid that.
             TargetOs::Windows => {
-                let escaped_dest_path = escape_for_powershell_single_quotes(&dest_path);
-                let escaped_archive_path = escape_for_powershell_single_quotes(&append_to_path(
-                    &dest_path,
-                    "backup.tar",
-                    &self.target_os,
-                ));
-                format!(
-                    "powershell -NoProfile -Command \"$dir='{0}'; $file='{1}'; New-Item -ItemType Directory -Path $dir -Force | Out-Null; $stdin=[Console]::OpenStandardInput(); $out=[System.IO.File]::Open($file,[System.IO.FileMode]::Create,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None); try {{ $stdin.CopyTo($out) }} finally {{ $out.Dispose() }}\"",
-                    escaped_dest_path, escaped_archive_path
-                )
+                let archive_path = append_to_path(&dest_path, "backup.tar", &self.target_os);
+                build_windows_receive_command(&dest_path, &archive_path)
             }
         };
 
@@ -255,6 +253,15 @@ impl BackupDestination for SshDestination {
             .stdout
             .take()
             .ok_or_else(|| BackupError::new("Failed to capture backup stream from docker"))?;
+
+        // Drain docker stderr so a full pipe cannot stall tar/docker while ssh
+        // is still reading the backup stream.
+        // if let Some(mut docker_stderr) = docker_exec.stderr.take() {
+        //     thread::spawn(move || {
+        //         let mut sink = Vec::new();
+        //         let _ = docker_stderr.read_to_end(&mut sink);
+        //     });
+        // }
 
         let child = Command::new("ssh")
             .arg(&self.host)
@@ -295,10 +302,45 @@ fn escape_for_powershell_single_quotes(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+fn build_windows_receive_command(dest_path: &str, archive_path: &str) -> String {
+    let escaped_dest_path = escape_for_powershell_single_quotes(dest_path);
+    let escaped_archive_path = escape_for_powershell_single_quotes(archive_path);
+    let script = format!(
+        "$dir='{escaped_dest_path}'; \
+         $file='{escaped_archive_path}'; \
+         New-Item -ItemType Directory -Path $dir -Force | Out-Null; \
+         $stdin = [Console]::OpenStandardInput(); \
+         $out = [System.IO.File]::Open( \
+            $file, \
+            [System.IO.FileMode]::Create, \
+            [System.IO.FileAccess]::Write, \
+            [System.IO.FileShare]::None \
+         ); \
+         try {{ $stdin.CopyTo($out) }} finally {{ $out.Dispose(); $stdin.Dispose() }}"
+    );
+
+    // PowerShell -EncodedCommand expects UTF-16LE bytes.
+    let encoded = BASE64.encode(script.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>());
+    format!("powershell -NoProfile -EncodedCommand {encoded}")
+}
+
 fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     format!("dockerbackup-{}-{}-{}", prefix, new_dir, timestamp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_windows_receive_command;
+
+    #[test]
+    fn windows_receive_command_avoids_cmd_pipes() {
+        let command = build_windows_receive_command(r"C:\backups", r"C:\backups\backup.tar");
+        assert!(command.starts_with("powershell -NoProfile -EncodedCommand "));
+        assert!(!command.contains('|'));
+        assert!(!command.contains("OpenStandardInput"));
+    }
 }
