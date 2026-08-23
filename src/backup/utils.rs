@@ -1,6 +1,7 @@
 use std::{collections::HashSet, path::Path, process::Command, sync::Arc};
 
 use crate::backup::destination::{BackupDestination, LocalDestination, SshDestination};
+use crate::backup::logger::{LogLevel, Logger};
 
 use super::backup_result::BackupError;
 
@@ -10,6 +11,21 @@ pub fn check_docker() -> Result<(), BackupError> {
         return Ok(());
     }
     Err(BackupError::new("Can't continue without Docker installed"))
+}
+
+pub fn stop_temp_container(container_name: &str, logger: &Logger) {
+    if let Err(err) = Command::new("docker")
+        .args(["rm", "-f", container_name])
+        .output()
+    {
+        logger.log(
+            &format!(
+                "Failed to stop temporary container {}: {}",
+                container_name, err
+            ),
+            LogLevel::Warning,
+        );
+    }
 }
 
 pub fn check_running_containers() -> Result<String, BackupError> {
@@ -49,6 +65,19 @@ pub fn parse_destination_path(path: &str) -> Result<Arc<dyn BackupDestination>, 
         Ok(Arc::new(LocalDestination {
             path: path.to_owned(),
         }))
+    } else {
+        Err(String::from("Local path does not exist"))
+    }
+}
+
+pub fn parse_source_path(path: &str) -> Result<String, String> {
+    if path.contains('@') {
+        return Err(String::from(
+            "SSH restore is not supported yet, only local paths are supported",
+        ));
+    }
+    if Path::new(path).exists() {
+        Ok(path.to_owned())
     } else {
         Err(String::from("Local path does not exist"))
     }
@@ -170,5 +199,26 @@ mod tests {
         let start = std::time::Instant::now();
         let message = get_elapsed_time(start, "Backup finished");
         assert!(message.starts_with("Backup finished: 00:00:0"));
+    }
+
+    #[test]
+    fn parses_valid_existing_local_source() {
+        let source = parse_source_path(".").unwrap();
+        assert_eq!(source, ".");
+    }
+
+    #[test]
+    fn rejects_nonexistent_local_source() {
+        let err = parse_source_path("/path/that/does/not/exist/hopefully").unwrap_err();
+        assert_eq!(err, "Local path does not exist");
+    }
+
+    #[test]
+    fn rejects_ssh_style_source_with_clear_error() {
+        let err = parse_source_path("user@host:/backup/path").unwrap_err();
+        assert_eq!(
+            err,
+            "SSH restore is not supported yet, only local paths are supported"
+        );
     }
 }

@@ -5,7 +5,7 @@ use clap::ArgAction;
 use crossterm::style::Color;
 use std::collections::HashSet;
 use std::io::stdout;
-use std::process::{exit, Child, Command};
+use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, check_running_containers, get_elapsed_time, get_volumes_size, handle_containers,
-    list_backup_volumes, parse_destination_path,
+    list_backup_volumes, parse_destination_path, parse_source_path, stop_temp_container,
 };
 
 use crate::backup::destination::BackupDestination;
@@ -25,7 +25,10 @@ mod backup_result;
 mod destination;
 mod logger;
 mod notification;
+mod restore;
 mod utils;
+
+pub use restore::DockerRestore;
 
 type BackupChannel = (
     mpsc::Sender<Result<String, BackupError>>,
@@ -45,48 +48,76 @@ pub struct DockerBackup {
     interrupt_requested: Arc<AtomicBool>,
 }
 
+pub fn build_command() -> clap::Command {
+    clap::Command::new("Docker Backup")
+        .version(env!("CARGO_PKG_VERSION"))
+        .author("radek00")
+        .about("CLI tool for backing up docker volumes")
+        .styles(Styles::styled()
+        .header(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
+        .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
+        .placeholder(AnsiColor::Yellow.on_default()))
+        .subcommand_negates_reqs(true)
+        .arg(clap::Arg::new("dest_path")
+            .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].")
+            .required(true)
+            .num_args(1..)
+            .action(ArgAction::Append)
+            .value_parser(parse_destination_path)
+            .short('d')
+        .long("destination"))
+        .arg(excluded_containers_arg())
+        .arg(excluded_volumes_arg())
+        .arg(clap::Arg::new("gotify_url")
+            .help("Gotify server url for notifications")
+            .required(false)
+            .short('g')
+            .long("gotify"))
+        .arg(clap::Arg::new("discord_url")
+            .help("Discord webhook url for notifications")
+            .required(false)
+            .long("discord"))
+        .subcommand(
+            clap::Command::new("restore")
+                .about("Restore docker volumes from a local backup")
+                .arg(clap::Arg::new("source_path")
+                    .help("Restore source path pointing at a dated backup directory containing backup.tar.")
+                    .required(true)
+                    .num_args(1)
+                    .value_parser(parse_source_path)
+                    .short('s')
+                    .long("source"))
+                .arg(excluded_containers_arg())
+                .arg(excluded_volumes_arg())
+        )
+}
+
+fn excluded_containers_arg() -> clap::Arg {
+    clap::Arg::new("excluded_containers")
+        .help("Containers to exclude")
+        .required(false)
+        .long("exclude-containers")
+        .num_args(1..)
+}
+
+fn excluded_volumes_arg() -> clap::Arg {
+    clap::Arg::new("excluded_volumes")
+        .help("Volumes to exclude")
+        .required(false)
+        .long("exclude-volumes")
+        .num_args(1..)
+}
+
 impl DockerBackup {
-    pub fn build() -> DockerBackup {
+    pub fn build(mut matches: clap::ArgMatches) -> DockerBackup {
         check_docker().expect("Can't continue without Docker installed");
         let date = chrono::Local::now();
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
 
-        let mut matches = clap::Command::new("Docker Backup")
-            .version(env!("CARGO_PKG_VERSION"))
-            .author("radek00")
-            .about("CLI tool for backing up docker volumes")
-            .styles(Styles::styled()
-            .header(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
-            .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
-            .placeholder(AnsiColor::Yellow.on_default()))
-            .arg(clap::Arg::new("dest_path")
-                .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].")
-                .required(true)
-                .num_args(1..)
-                .action(ArgAction::Append)
-                .value_parser(parse_destination_path)
-                .short('d')
-            .long("destination"))
-            .arg(clap::Arg::new("excluded_containers")
-                .help("Containers to exclude from backup")
-                .required(false)
-                .long("exclude-containers")
-                .num_args(1..))
-            .arg(clap::Arg::new("excluded_volumes")
-                .help("Volumes to exclude from backup")
-                .required(false)
-                .long("exclude-volumes")
-                .num_args(1..))
-            .arg(clap::Arg::new("gotify_url")
-                .help("Gotify server url for notifications")
-                .required(false)
-                .short('g')
-                .long("gotify"))
-            .arg(clap::Arg::new("discord_url")
-                .help("Discord webhook url for notifications")
-                .required(false)
-                .long("discord"))
-            .get_matches();
+        let dest_paths = matches
+            .remove_many::<Arc<dyn BackupDestination>>("dest_path")
+            .unwrap()
+            .collect();
 
         let excluded_containers = match matches.remove_many::<String>("excluded_containers") {
             Some(excluded_containers) => excluded_containers.collect(),
@@ -98,10 +129,7 @@ impl DockerBackup {
         };
 
         DockerBackup {
-            dest_paths: matches
-                .remove_many::<Arc<dyn BackupDestination>>("dest_path")
-                .unwrap()
-                .collect(),
+            dest_paths,
             new_dir,
             excluded_containers,
             excluded_volumes,
@@ -309,7 +337,7 @@ impl DockerBackup {
                     Err(err) => {
                         if err.message == "Backup interrupted" {
                             for (child_handle, _, container_name) in &backup_handles {
-                                stop_backup_container(container_name, &self.logger);
+                                stop_temp_container(container_name, &self.logger);
                                 if let Err(err) = child_handle.lock().unwrap().kill() {
                                     self.logger.log(
                                         &format!("Error killing process: {:?}", err),
@@ -344,20 +372,5 @@ impl DockerBackup {
                 }
             }
         }
-    }
-}
-
-fn stop_backup_container(container_name: &str, logger: &Logger) {
-    if let Err(err) = Command::new("docker")
-        .args(["rm", "-f", container_name])
-        .output()
-    {
-        logger.log(
-            &format!(
-                "Failed to stop temporary backup container {}: {}",
-                container_name, err
-            ),
-            LogLevel::Warning,
-        );
     }
 }

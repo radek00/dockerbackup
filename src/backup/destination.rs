@@ -234,7 +234,7 @@ fn escape_for_single_quotes(value: &str) -> String {
     value.replace('\'', "'\\''")
 }
 
-fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
+pub(crate) fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
