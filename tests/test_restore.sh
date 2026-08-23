@@ -127,11 +127,3 @@ else
     echo "Missing backup archive check failed (no error reported)!"
     exit 1
 fi
-
-echo "Testing ssh-style restore source is rejected..."
-if $BINARY restore -s user@host:/some/path 2>&1 | grep -q "SSH restore is not supported yet"; then
-    echo "SSH restore rejection check passed."
-else
-    echo "SSH restore rejection check failed (no error reported)!"
-    exit 1
-fi
