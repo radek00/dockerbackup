@@ -108,5 +108,3 @@ else
     exit 1
 fi
 ssh -o StrictHostKeyChecking=no testuser@ssh-target "umount /config/small_remote"
-
-echo "All tests passed!"

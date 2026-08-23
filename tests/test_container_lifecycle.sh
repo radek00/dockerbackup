@@ -53,5 +53,3 @@ for name in container1 container2 container_excluded; do
         exit 1
     fi
 done
-
-echo "Container lifecycle test passed!"

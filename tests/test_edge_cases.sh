@@ -29,5 +29,3 @@ else
     echo "Existing destination directory check failed (no error reported)!"
     exit 1
 fi
-
-echo "All edge case tests passed!"
