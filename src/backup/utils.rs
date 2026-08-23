@@ -36,7 +36,7 @@ pub fn check_running_containers() -> Result<String, BackupError> {
     Ok(containers_list)
 }
 
-pub fn handle_containers(containers: &HashSet<&str>, command: &str) -> Result<(), BackupError> {
+pub fn handle_containers(containers: &HashSet<String>, command: &str) -> Result<(), BackupError> {
     let cmd_result = Command::new("docker")
         .arg(command)
         .args(containers)
@@ -45,6 +45,60 @@ pub fn handle_containers(containers: &HashSet<&str>, command: &str) -> Result<()
         return Ok(());
     }
     Err(BackupError::new("Error handling containers"))
+}
+
+pub fn extract_excluded_lists(matches: &mut clap::ArgMatches) -> (Vec<String>, Vec<String>) {
+    let excluded_containers = matches
+        .remove_many::<String>("excluded_containers")
+        .map(|c| c.collect())
+        .unwrap_or_default();
+    let excluded_volumes = matches
+        .remove_many::<String>("excluded_volumes")
+        .map(|v| v.collect())
+        .unwrap_or_default();
+    (excluded_containers, excluded_volumes)
+}
+
+pub fn resolve_containers_to_manage(excluded: &[String]) -> Result<HashSet<String>, BackupError> {
+    let containers = check_running_containers()?;
+    let mut running: HashSet<String> = containers
+        .trim()
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect();
+    for excluded_container in excluded {
+        running.remove(excluded_container);
+    }
+    Ok(running)
+}
+
+pub fn pause_containers(containers: &HashSet<String>, logger: &Logger) -> Result<(), BackupError> {
+    if containers.is_empty() {
+        return Ok(());
+    }
+    logger.log("Stopping containers...", LogLevel::Info);
+    handle_containers(containers, "stop")
+}
+
+pub fn resume_containers(containers: &HashSet<String>, logger: &Logger) -> Result<(), BackupError> {
+    if containers.is_empty() {
+        return Ok(());
+    }
+    logger.log("Starting containers...", LogLevel::Info);
+    handle_containers(containers, "start")
+}
+
+pub fn with_containers_paused<T>(
+    excluded: &[String],
+    logger: &Logger,
+    work: impl FnOnce() -> T,
+) -> Result<T, BackupError> {
+    let containers = resolve_containers_to_manage(excluded)?;
+    pause_containers(&containers, logger)?;
+    let result = work();
+    resume_containers(&containers, logger)?;
+    Ok(result)
 }
 
 pub fn parse_destination_path(path: &str) -> Result<Arc<dyn BackupDestination>, String> {

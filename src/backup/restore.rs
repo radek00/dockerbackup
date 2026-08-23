@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::stdout;
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
@@ -10,8 +9,8 @@ use crate::backup::backup_result::BackupError;
 use crate::backup::destination::{build_temp_container_name, SpawnedBackup};
 use crate::backup::logger::{LogLevel, Logger};
 use crate::backup::utils::{
-    check_docker, check_running_containers, get_elapsed_time, handle_containers,
-    list_backup_volumes, stop_temp_container,
+    check_docker, extract_excluded_lists, get_elapsed_time, list_backup_volumes,
+    stop_temp_container, with_containers_paused,
 };
 
 pub struct DockerRestore {
@@ -26,14 +25,7 @@ impl DockerRestore {
     pub fn build(matches: &clap::ArgMatches) -> DockerRestore {
         check_docker().expect("Can't continue without Docker installed");
         let mut matches = matches.clone();
-        let excluded_containers = match matches.remove_many::<String>("excluded_containers") {
-            Some(excluded_containers) => excluded_containers.collect(),
-            None => Vec::new(),
-        };
-        let excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
-            Some(excluded_volumes) => excluded_volumes.collect(),
-            None => Vec::new(),
-        };
+        let (excluded_containers, excluded_volumes) = extract_excluded_lists(&mut matches);
 
         DockerRestore {
             source_path: matches.remove_one::<String>("source_path").unwrap(),
@@ -46,15 +38,6 @@ impl DockerRestore {
 
     pub fn restore(self) -> Result<(), BackupError> {
         self.logger.clear_terminal();
-
-        let containers = check_running_containers()?;
-        let mut running_containers: HashSet<&str> =
-            containers.trim().split('\n').collect::<HashSet<&str>>();
-        running_containers.retain(|&x| !x.is_empty());
-
-        for container in &self.excluded_containers {
-            running_containers.remove(container.as_str());
-        }
 
         let logger_ctrlc = Arc::clone(&self.logger);
         let interrupt_requested_ctrlc = Arc::clone(&self.interrupt_requested);
@@ -81,18 +64,9 @@ impl DockerRestore {
         };
 
         let result = match result {
-            Ok(volumes) => {
-                if !running_containers.is_empty() {
-                    self.logger.log("Stopping containers...", LogLevel::Info);
-                    handle_containers(&running_containers, "stop")?;
-                }
-                let restore_result = self.run_restore(&volumes);
-                if !running_containers.is_empty() {
-                    self.logger.log("Starting containers...", LogLevel::Info);
-                    handle_containers(&running_containers, "start")?;
-                }
-                restore_result
-            }
+            Ok(volumes) => with_containers_paused(&self.excluded_containers, &self.logger, || {
+                self.run_restore(&volumes)
+            })?,
             Err(err) => Err(err),
         };
 

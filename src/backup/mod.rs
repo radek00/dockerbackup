@@ -3,7 +3,6 @@ use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use crossterm::style::Color;
-use std::collections::HashSet;
 use std::io::stdout;
 use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
@@ -14,8 +13,8 @@ use std::sync::{
 use std::thread;
 use std::time::Instant;
 use utils::{
-    check_docker, check_running_containers, get_elapsed_time, get_volumes_size, handle_containers,
-    list_backup_volumes, parse_destination_path, parse_source_path, stop_temp_container,
+    check_docker, extract_excluded_lists, get_elapsed_time, get_volumes_size, list_backup_volumes,
+    parse_destination_path, parse_source_path, stop_temp_container, with_containers_paused,
 };
 
 use crate::backup::destination::BackupDestination;
@@ -119,14 +118,7 @@ impl DockerBackup {
             .unwrap()
             .collect();
 
-        let excluded_containers = match matches.remove_many::<String>("excluded_containers") {
-            Some(excluded_containers) => excluded_containers.collect(),
-            None => Vec::new(),
-        };
-        let excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
-            Some(excluded_volumes) => excluded_volumes.collect(),
-            None => Vec::new(),
-        };
+        let (excluded_containers, excluded_volumes) = extract_excluded_lists(&mut matches);
 
         DockerBackup {
             dest_paths,
@@ -143,14 +135,6 @@ impl DockerBackup {
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
         self.logger.clear_terminal();
-        let containers = check_running_containers()?;
-        let mut running_containers: HashSet<&str> =
-            containers.trim().split('\n').collect::<HashSet<&str>>();
-        running_containers.retain(|&x| !x.is_empty());
-
-        for container in &self.excluded_containers {
-            running_containers.remove(container.as_str());
-        }
 
         let (sender, receiver): BackupChannel = mpsc::channel();
         let mut call_count = 0;
@@ -177,19 +161,12 @@ impl DockerBackup {
         self.receiver = Some(receiver);
         self.sender = Some(sender);
 
-        if !running_containers.is_empty() {
-            self.logger.log("Stopping containers...", LogLevel::Info);
-            handle_containers(&running_containers, "stop")?;
-        }
-
-        self.logger.hide_cursor();
-        let results = self.run();
-        self.logger.show_cursor();
-
-        if !running_containers.is_empty() {
-            self.logger.log("Starting containers...", LogLevel::Info);
-            handle_containers(&running_containers, "start")?;
-        }
+        let results = with_containers_paused(&self.excluded_containers, &self.logger, || {
+            self.logger.hide_cursor();
+            let results = self.run();
+            self.logger.show_cursor();
+            results
+        })?;
 
         for result in results {
             match result {
