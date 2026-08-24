@@ -1,10 +1,10 @@
+use crossterm::style::Color;
 use std::io::stdout;
 use std::path::Path;
 use std::process::{exit, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use crossterm::style::Color;
 
 use crate::backup::backup_result::BackupError;
 use crate::backup::destination::{build_temp_container_name, SpawnedBackup};
@@ -72,9 +72,7 @@ impl DockerRestore {
         };
 
         if let Err(err) = result {
-            if err.message != "Restore interrupted" {
-                self.logger.log(&format!("Error: {}", err), LogLevel::Error);
-            }
+            self.logger.log(&format!("Error: {}", err), LogLevel::Error);
         }
         Ok(())
     }
@@ -120,7 +118,7 @@ impl DockerRestore {
             }
             self.logger.log_elapsed_time(
                 0,
-                &get_elapsed_time(timer, format!("\rRestore running time").as_str()),
+                get_elapsed_time(timer, "\rRestore running time").as_str(),
                 Color::Cyan,
             );
 
