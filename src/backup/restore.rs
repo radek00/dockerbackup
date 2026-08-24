@@ -14,6 +14,8 @@ use crate::backup::utils::{
     stop_temp_container, with_containers_paused,
 };
 
+const RESTORE_INTERRUPTED: &str = "Restore interrupted";
+
 pub struct DockerRestore {
     source_path: String,
     excluded_containers: Vec<String>,
@@ -87,13 +89,18 @@ impl DockerRestore {
         loop {
             if self.interrupt_requested.load(Ordering::Relaxed) {
                 stop_temp_container(&spawned.temp_container_name, &self.logger);
-                let _ = child.kill();
+                if let Err(err) = child.kill() {
+                    self.logger.log(
+                        &format!("Error killing process: {:?}", err),
+                        LogLevel::Error,
+                    );
+                }
                 self.logger.reset_cursor_after_timers(1);
                 self.logger.log(
                     "Restore interrupted, press Ctrl+C again to force exit",
                     LogLevel::Warning,
                 );
-                return Err(BackupError::new("Restore interrupted"));
+                return Err(BackupError::new(RESTORE_INTERRUPTED));
             }
 
             if let Ok(Some(status)) = child.try_wait() {

@@ -29,6 +29,8 @@ mod utils;
 
 pub use restore::DockerRestore;
 
+const BACKUP_INTERRUPTED: &str = "Backup interrupted";
+
 type BackupChannel = (
     mpsc::Sender<Result<String, BackupError>>,
     mpsc::Receiver<Result<String, BackupError>>,
@@ -146,7 +148,7 @@ impl DockerBackup {
         ctrlc::set_handler(move || {
             if call_count == 0 {
                 sender_clone
-                    .send(Err(BackupError::new("Backup interrupted")))
+                    .send(Err(BackupError::new(BACKUP_INTERRUPTED)))
                     .unwrap();
 
                 interrupt_requested_ctrlc.store(true, Ordering::Relaxed);
@@ -312,7 +314,7 @@ impl DockerBackup {
                         }
                     }
                     Err(err) => {
-                        if err.message == "Backup interrupted" {
+                        if err.message == BACKUP_INTERRUPTED {
                             for (child_handle, _, container_name) in &backup_handles {
                                 stop_temp_container(container_name, &self.logger);
                                 if let Err(err) = child_handle.lock().unwrap().kill() {
@@ -338,7 +340,7 @@ impl DockerBackup {
                                 LogLevel::Warning,
                             );
 
-                            results.push(Err(BackupError::new("Backup interrupted")));
+                            results.push(Err(BackupError::new(BACKUP_INTERRUPTED)));
                             return results;
                         }
                         results.push(Err(err));
