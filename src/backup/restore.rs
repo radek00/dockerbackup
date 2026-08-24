@@ -4,6 +4,7 @@ use std::process::{exit, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crossterm::style::Color;
 
 use crate::backup::backup_result::BackupError;
 use crate::backup::destination::{build_temp_container_name, SpawnedBackup};
@@ -70,19 +71,16 @@ impl DockerRestore {
             Err(err) => Err(err),
         };
 
-        match result {
-            Ok(message) => self.logger.log(&message, LogLevel::Success),
-            Err(err) => self.logger.log(&format!("Error: {}", err), LogLevel::Error),
+        if let Err(err) = result {
+            if err.message != "Restore interrupted" {
+                self.logger.log(&format!("Error: {}", err), LogLevel::Error);
+            }
         }
         Ok(())
     }
 
     fn run_restore(&self, volumes: &[String]) -> Result<String, BackupError> {
         self.logger.log("Restore started...", LogLevel::Info);
-        self.logger.log(
-            &format!("Restoring volumes: {}", volumes.join(", ")),
-            LogLevel::Info,
-        );
 
         let spawned = spawn_restore(&self.source_path, volumes)?;
         let mut child = spawned.child;
@@ -92,6 +90,7 @@ impl DockerRestore {
             if self.interrupt_requested.load(Ordering::Relaxed) {
                 stop_temp_container(&spawned.temp_container_name, &self.logger);
                 let _ = child.kill();
+                self.logger.reset_cursor_after_timers(1);
                 self.logger.log(
                     "Restore interrupted, press Ctrl+C again to force exit",
                     LogLevel::Warning,
@@ -101,22 +100,31 @@ impl DockerRestore {
 
             if let Ok(Some(status)) = child.try_wait() {
                 return if status.success() {
-                    Ok(get_elapsed_time(
+                    let msg = get_elapsed_time(
                         timer,
                         &format!(
                             "Restore from {} completed successfully in",
                             self.source_path
                         ),
-                    ))
+                    );
+                    self.logger.log_elapsed_time(0, &msg, Color::Green);
+                    self.logger.reset_cursor_after_timers(1);
+                    Ok(msg)
                 } else {
+                    self.logger.reset_cursor_after_timers(1);
                     Err(BackupError::new(&format!(
                         "Restore from {} failed",
                         self.source_path
                     )))
                 };
             }
+            self.logger.log_elapsed_time(
+                0,
+                &get_elapsed_time(timer, format!("\rRestore running time").as_str()),
+                Color::Cyan,
+            );
 
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_secs(1));
         }
     }
 }
