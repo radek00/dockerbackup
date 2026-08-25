@@ -125,11 +125,6 @@ pub fn parse_destination_path(path: &str) -> Result<Arc<dyn BackupDestination>, 
 }
 
 pub fn parse_source_path(path: &str) -> Result<String, String> {
-    if path.contains('@') {
-        return Err(String::from(
-            "SSH restore is not supported yet, only local paths are supported",
-        ));
-    }
     if Path::new(path).exists() {
         Ok(path.to_owned())
     } else {
@@ -265,14 +260,5 @@ mod tests {
     fn rejects_nonexistent_local_source() {
         let err = parse_source_path("/path/that/does/not/exist/hopefully").unwrap_err();
         assert_eq!(err, "Local path does not exist");
-    }
-
-    #[test]
-    fn rejects_ssh_style_source_with_clear_error() {
-        let err = parse_source_path("user@host:/backup/path").unwrap_err();
-        assert_eq!(
-            err,
-            "SSH restore is not supported yet, only local paths are supported"
-        );
     }
 }
