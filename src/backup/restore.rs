@@ -7,11 +7,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::backup::backup_result::BackupError;
-use crate::backup::destination::{build_temp_container_name, SpawnedBackup};
+use crate::backup::destination::SpawnedBackup;
 use crate::backup::logger::{LogLevel, Logger};
 use crate::backup::utils::{
-    check_docker, extract_excluded_lists, get_elapsed_time, list_backup_volumes,
-    stop_temp_container, with_containers_paused,
+    build_temp_container_name, check_docker, extract_excluded_lists, get_elapsed_time,
+    list_backup_volumes, stop_temp_container, with_containers_paused,
 };
 
 const RESTORE_INTERRUPTED: &str = "Restore interrupted";

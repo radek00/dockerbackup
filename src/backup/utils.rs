@@ -1,3 +1,4 @@
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, path::Path, process::Command, sync::Arc};
 
 use crate::backup::destination::{BackupDestination, LocalDestination, SshDestination};
@@ -213,6 +214,14 @@ pub fn get_elapsed_time(start: std::time::Instant, description: &str) -> String 
         elapsed.as_secs() % 3600 / 60,
         elapsed.as_secs() % 60
     )
+}
+
+pub fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("dockerbackup-{}-{}-{}", prefix, new_dir, timestamp)
 }
 
 #[cfg(test)]

@@ -3,6 +3,8 @@ use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use crossterm::style::Color;
+use destination::BackupDestination;
+use logger::{LogLevel, Logger};
 use std::io::stdout;
 use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
@@ -16,9 +18,6 @@ use utils::{
     check_docker, extract_excluded_lists, get_elapsed_time, get_volumes_size, list_backup_volumes,
     parse_destination_path, parse_source_path, stop_temp_container, with_containers_paused,
 };
-
-use crate::backup::destination::BackupDestination;
-use crate::backup::logger::{LogLevel, Logger};
 
 mod backup_result;
 mod destination;
