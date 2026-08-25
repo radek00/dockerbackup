@@ -1,10 +1,10 @@
 [package]
 name = "dockerbackup"
-version = "2.3.0"
+version = "3.0.0"
 edition = "2021"
 authors = ["Radek"]
 license = "MIT OR Apache-2.0"
-description = "This is a simple Docker backup tool. It allows you to automatically stop running containers and backup Docker volumes to local or remote destination."
+description = "A simple Docker backup and restore tool"
 readme = "README.md"
 homepage = "https://github.com/radek00/dockerbackup"
 repository = "https://github.com/radek00/dockerbackup"
