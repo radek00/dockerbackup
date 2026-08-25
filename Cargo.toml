@@ -16,7 +16,6 @@ categories = ["command-line-utilities"]
 [dependencies]
 chrono = "0.4"
 reqwest = { version = "0.13", features = ["blocking", "json"] }
-openssl = { version = "0.10", features = ["vendored"] }
 clap = "4.6.4"
 ctrlc = "3.5.2"
 crossterm = "0.29.0"
