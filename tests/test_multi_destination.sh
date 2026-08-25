@@ -69,4 +69,3 @@ if ! verify_local test -f /verify/backup.tar; then
 fi
 
 echo "Partial failure test passed!"
-echo "All multi-destination tests passed!"

@@ -3,9 +3,10 @@ use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use crossterm::style::Color;
-use std::collections::HashSet;
+use destination::BackupDestination;
+use logger::{LogLevel, Logger};
 use std::io::stdout;
-use std::process::{exit, Child, Command};
+use std::process::{exit, Child};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -14,18 +15,20 @@ use std::sync::{
 use std::thread;
 use std::time::Instant;
 use utils::{
-    check_docker, check_running_containers, get_elapsed_time, get_volumes_size, handle_containers,
-    list_backup_volumes, parse_destination_path,
+    check_docker, extract_excluded_lists, get_elapsed_time, get_volumes_size, list_backup_volumes,
+    parse_destination_path, parse_source_path, stop_temp_container, with_containers_paused,
 };
-
-use crate::backup::destination::BackupDestination;
-use crate::backup::logger::{LogLevel, Logger};
 
 mod backup_result;
 mod destination;
 mod logger;
 mod notification;
+mod restore;
 mod utils;
+
+pub use restore::DockerRestore;
+
+const BACKUP_INTERRUPTED: &str = "Backup interrupted";
 
 type BackupChannel = (
     mpsc::Sender<Result<String, BackupError>>,
@@ -45,63 +48,81 @@ pub struct DockerBackup {
     interrupt_requested: Arc<AtomicBool>,
 }
 
+pub fn build_command() -> clap::Command {
+    clap::Command::new("Docker Backup")
+        .version(env!("CARGO_PKG_VERSION"))
+        .author("radek00")
+        .about("CLI tool for backing up docker volumes")
+        .styles(Styles::styled()
+        .header(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
+        .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
+        .placeholder(AnsiColor::Yellow.on_default()))
+        .subcommand_negates_reqs(true)
+        .arg(clap::Arg::new("dest_path")
+            .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].")
+            .required(true)
+            .num_args(1..)
+            .action(ArgAction::Append)
+            .value_parser(parse_destination_path)
+            .short('d')
+        .long("destination"))
+        .arg(excluded_containers_arg())
+        .arg(excluded_volumes_arg())
+        .arg(clap::Arg::new("gotify_url")
+            .help("Gotify server url for notifications")
+            .required(false)
+            .short('g')
+            .long("gotify"))
+        .arg(clap::Arg::new("discord_url")
+            .help("Discord webhook url for notifications")
+            .required(false)
+            .long("discord"))
+        .subcommand(
+            clap::Command::new("restore")
+                .about("Restore docker volumes from a local backup")
+                .arg(clap::Arg::new("source_path")
+                    .help("Restore source path pointing at a dated backup directory containing backup.tar.")
+                    .required(true)
+                    .num_args(1)
+                    .value_parser(parse_source_path)
+                    .short('s')
+                    .long("source"))
+                .arg(excluded_containers_arg())
+                .arg(excluded_volumes_arg())
+        )
+}
+
+fn excluded_containers_arg() -> clap::Arg {
+    clap::Arg::new("excluded_containers")
+        .help("Containers to exclude")
+        .required(false)
+        .long("exclude-containers")
+        .num_args(1..)
+}
+
+fn excluded_volumes_arg() -> clap::Arg {
+    clap::Arg::new("excluded_volumes")
+        .help("Volumes to exclude")
+        .required(false)
+        .long("exclude-volumes")
+        .num_args(1..)
+}
+
 impl DockerBackup {
-    pub fn build() -> DockerBackup {
+    pub fn build(mut matches: clap::ArgMatches) -> DockerBackup {
         check_docker().expect("Can't continue without Docker installed");
         let date = chrono::Local::now();
         let new_dir = format!("{}-{}-{}", date.year(), date.month(), date.day());
 
-        let mut matches = clap::Command::new("Docker Backup")
-            .version(env!("CARGO_PKG_VERSION"))
-            .author("radek00")
-            .about("CLI tool for backing up docker volumes")
-            .styles(Styles::styled()
-            .header(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
-            .usage(AnsiColor::Yellow.on_default() | Effects::BOLD)
-            .placeholder(AnsiColor::Yellow.on_default()))
-            .arg(clap::Arg::new("dest_path")
-                .help("Backup destination path. This argument can be used multiple times and each path must be in the following format: [/backup or user@host:/backup].")
-                .required(true)
-                .num_args(1..)
-                .action(ArgAction::Append)
-                .value_parser(parse_destination_path)
-                .short('d')
-            .long("destination"))
-            .arg(clap::Arg::new("excluded_containers")
-                .help("Containers to exclude from backup")
-                .required(false)
-                .long("exclude-containers")
-                .num_args(1..))
-            .arg(clap::Arg::new("excluded_volumes")
-                .help("Volumes to exclude from backup")
-                .required(false)
-                .long("exclude-volumes")
-                .num_args(1..))
-            .arg(clap::Arg::new("gotify_url")
-                .help("Gotify server url for notifications")
-                .required(false)
-                .short('g')
-                .long("gotify"))
-            .arg(clap::Arg::new("discord_url")
-                .help("Discord webhook url for notifications")
-                .required(false)
-                .long("discord"))
-            .get_matches();
+        let dest_paths = matches
+            .remove_many::<Arc<dyn BackupDestination>>("dest_path")
+            .unwrap()
+            .collect();
 
-        let excluded_containers = match matches.remove_many::<String>("excluded_containers") {
-            Some(excluded_containers) => excluded_containers.collect(),
-            None => Vec::new(),
-        };
-        let excluded_volumes = match matches.remove_many::<String>("excluded_volumes") {
-            Some(excluded_volumes) => excluded_volumes.collect(),
-            None => Vec::new(),
-        };
+        let (excluded_containers, excluded_volumes) = extract_excluded_lists(&mut matches);
 
         DockerBackup {
-            dest_paths: matches
-                .remove_many::<Arc<dyn BackupDestination>>("dest_path")
-                .unwrap()
-                .collect(),
+            dest_paths,
             new_dir,
             excluded_containers,
             excluded_volumes,
@@ -115,14 +136,6 @@ impl DockerBackup {
     }
     pub fn backup(mut self) -> Result<(), BackupError> {
         self.logger.clear_terminal();
-        let containers = check_running_containers()?;
-        let mut running_containers: HashSet<&str> =
-            containers.trim().split('\n').collect::<HashSet<&str>>();
-        running_containers.retain(|&x| !x.is_empty());
-
-        for container in &self.excluded_containers {
-            running_containers.remove(container.as_str());
-        }
 
         let (sender, receiver): BackupChannel = mpsc::channel();
         let mut call_count = 0;
@@ -134,7 +147,7 @@ impl DockerBackup {
         ctrlc::set_handler(move || {
             if call_count == 0 {
                 sender_clone
-                    .send(Err(BackupError::new("Backup interrupted")))
+                    .send(Err(BackupError::new(BACKUP_INTERRUPTED)))
                     .unwrap();
 
                 interrupt_requested_ctrlc.store(true, Ordering::Relaxed);
@@ -149,19 +162,12 @@ impl DockerBackup {
         self.receiver = Some(receiver);
         self.sender = Some(sender);
 
-        if !running_containers.is_empty() {
-            self.logger.log("Stopping containers...", LogLevel::Info);
-            handle_containers(&running_containers, "stop")?;
-        }
-
-        self.logger.hide_cursor();
-        let results = self.run();
-        self.logger.show_cursor();
-
-        if !running_containers.is_empty() {
-            self.logger.log("Starting containers...", LogLevel::Info);
-            handle_containers(&running_containers, "start")?;
-        }
+        let results = with_containers_paused(&self.excluded_containers, &self.logger, || {
+            self.logger.hide_cursor();
+            let results = self.run();
+            self.logger.show_cursor();
+            results
+        })?;
 
         for result in results {
             match result {
@@ -307,9 +313,9 @@ impl DockerBackup {
                         }
                     }
                     Err(err) => {
-                        if err.message == "Backup interrupted" {
+                        if err.message == BACKUP_INTERRUPTED {
                             for (child_handle, _, container_name) in &backup_handles {
-                                stop_backup_container(container_name, &self.logger);
+                                stop_temp_container(container_name, &self.logger);
                                 if let Err(err) = child_handle.lock().unwrap().kill() {
                                     self.logger.log(
                                         &format!("Error killing process: {:?}", err),
@@ -333,7 +339,7 @@ impl DockerBackup {
                                 LogLevel::Warning,
                             );
 
-                            results.push(Err(BackupError::new("Backup interrupted")));
+                            results.push(Err(BackupError::new(BACKUP_INTERRUPTED)));
                             return results;
                         }
                         results.push(Err(err));
@@ -344,20 +350,5 @@ impl DockerBackup {
                 }
             }
         }
-    }
-}
-
-fn stop_backup_container(container_name: &str, logger: &Logger) {
-    if let Err(err) = Command::new("docker")
-        .args(["rm", "-f", container_name])
-        .output()
-    {
-        logger.log(
-            &format!(
-                "Failed to stop temporary backup container {}: {}",
-                container_name, err
-            ),
-            LogLevel::Warning,
-        );
     }
 }

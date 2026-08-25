@@ -2,10 +2,9 @@ use std::{
     path::Path,
     process::{Child, Command, Stdio},
     thread,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::backup::backup_result::BackupError;
+use crate::backup::{backup_result::BackupError, utils::build_temp_container_name};
 
 #[derive(Debug, Clone)]
 pub struct LocalDestination {
@@ -232,14 +231,6 @@ impl BackupDestination for SshDestination {
 
 fn escape_for_single_quotes(value: &str) -> String {
     value.replace('\'', "'\\''")
-}
-
-fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("dockerbackup-{}-{}-{}", prefix, new_dir, timestamp)
 }
 
 #[cfg(test)]
