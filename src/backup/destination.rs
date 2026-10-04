@@ -1,10 +1,16 @@
 use std::{
+    fs::File,
+    io::{self, Read, Write},
     path::Path,
-    process::{Child, Command, Stdio},
-    thread,
+    process::{Child, ChildStdout, Command, ExitStatus, Stdio},
+    thread::{self, JoinHandle},
 };
 
-use crate::backup::{backup_result::BackupError, utils::build_temp_container_name};
+use age::{EncryptError, Encryptor, Recipient};
+
+use crate::backup::{
+    backup_result::BackupError, utils::build_temp_container_name, BackupEncryptionConfig,
+};
 
 #[derive(Debug, Clone)]
 pub struct LocalDestination {
@@ -17,10 +23,79 @@ pub struct SshDestination {
     pub path: String,
 }
 
+/// A running pipeline: child processes plus an optional in-process stream worker.
 #[derive(Debug)]
 pub struct SpawnedBackup {
-    pub child: Child,
     pub temp_container_name: String,
+    pub stages: Vec<(&'static str, Child)>,
+    pub worker: Option<JoinHandle<Result<(), BackupError>>>,
+}
+
+impl SpawnedBackup {
+    /// Returns `None` while running, `Some(result)` once every stage and the worker are done.
+    /// On failure all remaining stages are torn down.
+    pub fn poll(&mut self) -> Option<Result<(), BackupError>> {
+        if self.worker.as_ref().is_some_and(|w| w.is_finished()) {
+            if let Err(err) = self.join_worker() {
+                self.abort();
+                return Some(Err(err));
+            }
+        }
+
+        let mut running = false;
+        let mut failures: Vec<String> = Vec::new();
+        for (name, child) in &mut self.stages {
+            match child.try_wait() {
+                Ok(None) => running = true,
+                Ok(Some(status)) if status.success() => {}
+                Ok(Some(status)) => failures.push(stage_error(name, child, status)),
+                Err(err) => failures.push(format!("{} status check failed: {}", name, err)),
+            }
+        }
+
+        if !failures.is_empty() {
+            self.abort();
+            return Some(Err(BackupError::new(&failures.join("; "))));
+        }
+        if running || self.worker.is_some() {
+            return None;
+        }
+        Some(Ok(()))
+    }
+
+    /// Kills all stages, removes the temp container and waits for the worker to exit.
+    pub fn abort(&mut self) {
+        for (_, child) in &mut self.stages {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &self.temp_container_name])
+            .output();
+        let _ = self.join_worker();
+    }
+
+    fn join_worker(&mut self) -> Result<(), BackupError> {
+        match self.worker.take() {
+            Some(worker) => worker
+                .join()
+                .unwrap_or_else(|_| Err(BackupError::new("Backup worker thread panicked"))),
+            None => Ok(()),
+        }
+    }
+}
+
+fn stage_error(name: &str, child: &mut Child, status: ExitStatus) -> String {
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        format!("{} exited with {}", name, status)
+    } else {
+        format!("{} exited with {}: {}", name, status, stderr)
+    }
 }
 
 pub trait BackupDestination: std::fmt::Debug + Send + Sync {
@@ -40,7 +115,12 @@ pub trait BackupDestination: std::fmt::Debug + Send + Sync {
     fn available_space(&self) -> Result<u64, BackupError>;
 
     fn prepare(&self, new_dir: &str) -> Result<(), BackupError>;
-    fn spawn_backup(&self, volumes: &[String], new_dir: &str)
+    fn spawn_backup(
+        &self,
+        volumes: &[String],
+        new_dir: &str,
+        encryption: Option<&BackupEncryptionConfig>,
+    )
         -> Result<SpawnedBackup, BackupError>;
     fn get_display_name(&self) -> String;
 }
@@ -87,39 +167,46 @@ impl BackupDestination for LocalDestination {
         &self,
         volumes: &[String],
         new_dir: &str,
+        encryption: Option<&BackupEncryptionConfig>,
     ) -> Result<SpawnedBackup, BackupError> {
         let temp_container_name = build_temp_container_name("local", new_dir);
         let backup_dir = Path::new(&self.path).join(new_dir);
 
-        let mut docker = Command::new("docker");
-        docker
-            .arg("run")
-            .arg("--rm")
-            .arg("--name")
-            .arg(&temp_container_name);
-
-        for volume in volumes {
-            docker
+        let Some(config) = encryption else {
+            let mut docker = docker_run_command(&temp_container_name, volumes);
+            let child = docker
                 .arg("-v")
-                .arg(format!("{}:/data/{}:ro", volume, volume));
-        }
+                .arg(format!("{}:/backup", backup_dir.display()))
+                .arg("alpine")
+                .arg("sh")
+                .arg("-c")
+                .arg("tar -cf /backup/backup.tar -C /data .")
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    BackupError::new(&format!("Failed to spawn docker backup container: {}", e))
+                })?;
 
-        let child = docker
-            .arg("-v")
-            .arg(format!("{}:/backup", backup_dir.display()))
-            .arg("alpine")
-            .arg("sh")
-            .arg("-c")
-            .arg("tar -cf /backup/backup.tar -C /data .")
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                BackupError::new(&format!("Failed to spawn docker backup container: {}", e))
-            })?;
+            return Ok(SpawnedBackup {
+                temp_container_name,
+                stages: vec![("docker", child)],
+                worker: None,
+            });
+        };
+
+        // Validate inputs and open the output before spawning anything that needs cleanup.
+        let recipients = parse_age_recipients(&config.recipients)?;
+        let output_file = File::create(backup_dir.join("backup.tar.age"))?;
+        let (child, docker_stdout) = spawn_tar_stream(&temp_container_name, volumes)?;
+
+        let worker = thread::spawn(move || {
+            encrypt_stream_to_writer(docker_stdout, output_file, recipients)
+        });
 
         Ok(SpawnedBackup {
-            child,
             temp_container_name,
+            stages: vec![("docker", child)],
+            worker: Some(worker),
         })
     }
 
@@ -166,62 +253,58 @@ impl BackupDestination for SshDestination {
         &self,
         volumes: &[String],
         new_dir: &str,
+        encryption: Option<&BackupEncryptionConfig>,
     ) -> Result<SpawnedBackup, BackupError> {
         let temp_container_name = build_temp_container_name("ssh", new_dir);
 
-        let mut docker = Command::new("docker");
-        docker
-            .arg("run")
-            .arg("--rm")
-            .arg("--name")
-            .arg(&temp_container_name);
-
-        for volume in volumes {
-            docker
-                .arg("-v")
-                .arg(format!("{}:/data/{}:ro", volume, volume));
-        }
-
-        let mut docker_exec = docker
-            .arg("alpine")
-            .arg("sh")
-            .arg("-c")
-            .arg("tar -cf - -C /data .")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                BackupError::new(&format!("Failed to spawn docker backup container: {}", e))
-            })?;
+        // Validate before spawning anything that needs cleanup.
+        let recipients = encryption
+            .map(|config| parse_age_recipients(&config.recipients))
+            .transpose()?;
 
         let dest_path = format!("{}/{}", self.path, new_dir);
         let escaped_dest_path = escape_for_single_quotes(&dest_path);
+        let remote_file_name = if encryption.is_some() {
+            "backup.tar.age"
+        } else {
+            "backup.tar"
+        };
         let remote_command = format!(
-            "mkdir -p '{0}' && cat > '{0}/backup.tar'",
-            escaped_dest_path
+            "mkdir -p '{0}' && cat > '{0}/{1}'",
+            escaped_dest_path, remote_file_name
         );
 
-        let docker_stdout = docker_exec
-            .stdout
-            .take()
-            .ok_or_else(|| BackupError::new("Failed to capture backup stream from docker"))?;
-
-        let child = Command::new("ssh")
-            .arg(&self.host)
-            .arg(remote_command)
-            .stdin(Stdio::from(docker_stdout))
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| BackupError::new(&format!("Failed to spawn ssh: {}", e)))?;
-
-        thread::spawn(move || {
-            let _ = docker_exec.wait();
-        });
-
-        Ok(SpawnedBackup {
-            child,
+        let (docker_child, docker_stdout) = spawn_tar_stream(&temp_container_name, volumes)?;
+        let mut backup = SpawnedBackup {
             temp_container_name,
-        })
+            stages: vec![("docker", docker_child)],
+            worker: None,
+        };
+
+        match recipients {
+            None => {
+                // Hand docker's stdout directly to ssh; no in-process copying needed.
+                let ssh = spawn_ssh(&self.host, &remote_command, Stdio::from(docker_stdout))
+                    .inspect_err(|_| backup.abort())?;
+                backup.stages.push(("ssh", ssh));
+            }
+            Some(recipients) => {
+                let mut ssh = spawn_ssh(&self.host, &remote_command, Stdio::piped())
+                    .inspect_err(|_| backup.abort())?;
+                let ssh_stdin = ssh.stdin.take();
+                backup.stages.push(("ssh", ssh));
+
+                let Some(ssh_stdin) = ssh_stdin else {
+                    backup.abort();
+                    return Err(BackupError::new("Failed to open ssh stdin for backup stream"));
+                };
+                backup.worker = Some(thread::spawn(move || {
+                    encrypt_stream_to_writer(docker_stdout, ssh_stdin, recipients)
+                }));
+            }
+        }
+
+        Ok(backup)
     }
 
     fn get_display_name(&self) -> String {
@@ -229,8 +312,101 @@ impl BackupDestination for SshDestination {
     }
 }
 
+fn docker_run_command(temp_container_name: &str, volumes: &[String]) -> Command {
+    let mut docker = Command::new("docker");
+    docker
+        .arg("run")
+        .arg("--rm")
+        .arg("--name")
+        .arg(temp_container_name);
+
+    for volume in volumes {
+        docker
+            .arg("-v")
+            .arg(format!("{}:/data/{}:ro", volume, volume));
+    }
+    docker
+}
+
+/// Spawns a container that writes a tar of all volumes to its stdout.
+fn spawn_tar_stream(
+    temp_container_name: &str,
+    volumes: &[String],
+) -> Result<(Child, ChildStdout), BackupError> {
+    let mut child = docker_run_command(temp_container_name, volumes)
+        .arg("alpine")
+        .arg("sh")
+        .arg("-c")
+        .arg("tar -cf - -C /data .")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            BackupError::new(&format!("Failed to spawn docker backup container: {}", e))
+        })?;
+
+    match child.stdout.take() {
+        Some(stdout) => Ok((child, stdout)),
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = Command::new("docker")
+                .args(["rm", "-f", temp_container_name])
+                .output();
+            Err(BackupError::new("Failed to capture backup stream from docker"))
+        }
+    }
+}
+
+fn spawn_ssh(host: &str, remote_command: &str, stdin: Stdio) -> Result<Child, BackupError> {
+    Command::new("ssh")
+        .arg(host)
+        .arg(remote_command)
+        .stdin(stdin)
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| BackupError::new(&format!("Failed to spawn ssh: {}", e)))
+}
+
 fn escape_for_single_quotes(value: &str) -> String {
     value.replace('\'', "'\\''")
+}
+
+fn parse_age_recipients(recipients: &[String]) -> Result<Vec<age::x25519::Recipient>, BackupError> {
+    recipients
+        .iter()
+        .map(|recipient| {
+            recipient.parse::<age::x25519::Recipient>().map_err(|_| {
+                BackupError::new(&format!(
+                    "Invalid age recipient: '{}'. Expected an age1... public key",
+                    recipient
+                ))
+            })
+        })
+        .collect()
+}
+
+fn encrypt_stream_to_writer<R: io::Read, W: io::Write>(
+    mut input: R,
+    output: W,
+    recipients: Vec<age::x25519::Recipient>,
+) -> Result<(), BackupError> {
+    let encryptor = Encryptor::with_recipients(recipients.iter().map(|r| r as &dyn Recipient))
+        .map_err(map_encrypt_error)?;
+    let mut writer = encryptor
+        .wrap_output(io::BufWriter::new(output))
+        .map_err(|e| BackupError::new(&format!("Failed to initialize age writer: {}", e)))?;
+
+    io::copy(&mut input, &mut writer)?;
+    let mut output = writer
+        .finish()
+        .map_err(|e| BackupError::new(&format!("Failed to finalize age stream: {}", e)))?;
+    output.flush()?;
+    Ok(())
+}
+
+fn map_encrypt_error(err: EncryptError) -> BackupError {
+    BackupError::new(&format!("Failed to initialize age encryption: {}", err))
 }
 
 #[cfg(test)]

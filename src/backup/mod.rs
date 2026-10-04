@@ -3,10 +3,10 @@ use chrono::{self, Datelike};
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
 use crossterm::style::Color;
-use destination::BackupDestination;
+use destination::{BackupDestination, SpawnedBackup};
 use logger::{LogLevel, Logger};
 use std::io::stdout;
-use std::process::{exit, Child};
+use std::process::exit;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, extract_excluded_lists, get_elapsed_time, get_volumes_size, list_backup_volumes,
-    parse_destination_path, parse_source_path, stop_temp_container, with_containers_paused,
+    parse_destination_path, parse_source_path, with_containers_paused,
 };
 
 mod backup_result;
@@ -35,9 +35,15 @@ type BackupChannel = (
     mpsc::Receiver<Result<String, BackupError>>,
 );
 
+#[derive(Debug, Clone)]
+pub struct BackupEncryptionConfig {
+    pub recipients: Vec<String>,
+}
+
 pub struct DockerBackup {
     dest_paths: Vec<Arc<dyn BackupDestination>>,
     new_dir: String,
+    encryption: Option<BackupEncryptionConfig>,
     excluded_containers: Vec<String>,
     excluded_volumes: Vec<String>,
     gotify_url: Option<String>,
@@ -77,19 +83,39 @@ pub fn build_command() -> clap::Command {
             .help("Discord webhook url for notifications")
             .required(false)
             .long("discord"))
+        .arg(recipients_arg())
         .subcommand(
             clap::Command::new("restore")
                 .about("Restore docker volumes from a local backup")
                 .arg(clap::Arg::new("source_path")
-                    .help("Restore source path pointing at a dated backup directory containing backup.tar.")
+                    .help("Restore source path pointing at a dated backup directory containing backup.tar.age or backup.tar.")
                     .required(true)
                     .num_args(1)
                     .value_parser(parse_source_path)
                     .short('s')
                     .long("source"))
+                .arg(identities_arg())
                 .arg(excluded_containers_arg())
                 .arg(excluded_volumes_arg())
         )
+}
+
+fn recipients_arg() -> clap::Arg {
+    clap::Arg::new("recipients")
+        .help("Age recipient public key (age1...). Repeat to allow multiple decryptors.")
+        .required(false)
+        .long("recipient")
+        .action(ArgAction::Append)
+        .num_args(1..)
+}
+
+fn identities_arg() -> clap::Arg {
+    clap::Arg::new("identities")
+        .help("Path to an age identity file for decrypting backup.tar.age. Repeat for key rotation/fallback.")
+        .required(false)
+        .long("identity")
+        .action(ArgAction::Append)
+        .num_args(1..)
 }
 
 fn excluded_containers_arg() -> clap::Arg {
@@ -119,11 +145,23 @@ impl DockerBackup {
             .unwrap()
             .collect();
 
+        let recipients: Vec<String> = matches
+            .remove_many::<String>("recipients")
+            .map(|items| items.collect())
+            .unwrap_or_default();
+
+        let encryption = if recipients.is_empty() {
+            None
+        } else {
+            Some(BackupEncryptionConfig { recipients })
+        };
+
         let (excluded_containers, excluded_volumes) = extract_excluded_lists(&mut matches);
 
         DockerBackup {
             dest_paths,
             new_dir,
+            encryption,
             excluded_containers,
             excluded_volumes,
             gotify_url: matches.remove_one::<String>("gotify_url"),
@@ -210,7 +248,7 @@ impl DockerBackup {
             LogLevel::Info,
         );
 
-        let mut backup_handles: Vec<(Arc<Mutex<Child>>, String, String)> = Vec::new();
+        let mut backup_handles: Vec<(Arc<Mutex<SpawnedBackup>>, String)> = Vec::new();
 
         for dest in &self.dest_paths {
             if let Err(err) = dest.check_available_space(total_size) {
@@ -223,12 +261,11 @@ impl DockerBackup {
                 continue;
             }
 
-            match dest.spawn_backup(&volumes, &self.new_dir) {
+            match dest.spawn_backup(&volumes, &self.new_dir, self.encryption.as_ref()) {
                 Ok(spawned_backup) => {
                     backup_handles.push((
-                        Arc::new(Mutex::new(spawned_backup.child)),
+                        Arc::new(Mutex::new(spawned_backup)),
                         format!("Backup to destination {}", dest.get_display_name()),
-                        spawned_backup.temp_container_name,
                     ));
                 }
                 Err(err) => {
@@ -256,35 +293,38 @@ impl DockerBackup {
                         break;
                     }
 
-                    if let Ok(status) = handle.0.lock().unwrap().try_wait() {
-                        if let Some(status) = status {
-                            if status.success() {
-                                let msg = get_elapsed_time(
-                                    timer,
-                                    format!("{} completed successfully in", handle.1).as_str(),
-                                );
-                                logger_clone.log_elapsed_time(idx, &msg, Color::Green);
-                                sender_clone.send(Ok(msg)).unwrap();
-                            } else {
-                                sender_clone
-                                    .send(Err(BackupError::new(&format!(
-                                        "{} backup error",
-                                        handle.1
-                                    ))))
-                                    .unwrap();
-                            }
+                    // Separate statement so the lock is released before sleeping.
+                    let outcome = handle.0.lock().unwrap().poll();
+                    match outcome {
+                        Some(Ok(())) => {
+                            let msg = get_elapsed_time(
+                                timer,
+                                format!("{} completed successfully in", handle.1).as_str(),
+                            );
+                            logger_clone.log_elapsed_time(idx, &msg, Color::Green);
+                            sender_clone.send(Ok(msg)).unwrap();
                             return;
                         }
-
-                        logger_clone.log_elapsed_time(
-                            idx,
-                            &get_elapsed_time(
-                                timer,
-                                format!("\r{} running time", handle.1).as_str(),
-                            ),
-                            Color::Cyan,
-                        );
-                        thread::sleep(std::time::Duration::from_secs(1));
+                        Some(Err(err)) => {
+                            sender_clone
+                                .send(Err(BackupError::new(&format!(
+                                    "{} backup error: {}",
+                                    handle.1, err
+                                ))))
+                                .unwrap();
+                            return;
+                        }
+                        None => {
+                            logger_clone.log_elapsed_time(
+                                idx,
+                                &get_elapsed_time(
+                                    timer,
+                                    format!("\r{} running time", handle.1).as_str(),
+                                ),
+                                Color::Cyan,
+                            );
+                            thread::sleep(std::time::Duration::from_secs(1));
+                        }
                     }
                 }
             });
@@ -314,15 +354,8 @@ impl DockerBackup {
                     }
                     Err(err) => {
                         if err.message == BACKUP_INTERRUPTED {
-                            for (child_handle, _, container_name) in &backup_handles {
-                                stop_temp_container(container_name, &self.logger);
-                                if let Err(err) = child_handle.lock().unwrap().kill() {
-                                    self.logger.log(
-                                        &format!("Error killing process: {:?}", err),
-                                        LogLevel::Error,
-                                    );
-                                    results.push(Err(BackupError::new(err.to_string().as_str())));
-                                }
+                            for (backup_handle, _) in &backup_handles {
+                                backup_handle.lock().unwrap().abort();
                             }
                             for join_handle in join_handles {
                                 if let Err(err) = join_handle.join() {

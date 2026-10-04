@@ -14,21 +14,6 @@ pub fn check_docker() -> Result<(), BackupError> {
     Err(BackupError::new("Can't continue without Docker installed"))
 }
 
-pub fn stop_temp_container(container_name: &str, logger: &Logger) {
-    if let Err(err) = Command::new("docker")
-        .args(["rm", "-f", container_name])
-        .output()
-    {
-        logger.log(
-            &format!(
-                "Failed to stop temporary container {}: {}",
-                container_name, err
-            ),
-            LogLevel::Warning,
-        );
-    }
-}
-
 pub fn check_running_containers() -> Result<String, BackupError> {
     let running_containers = Command::new("docker")
         .args(["ps", "--format", "{{.Names}}"])
