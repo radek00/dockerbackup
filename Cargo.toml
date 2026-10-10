@@ -19,3 +19,4 @@ reqwest = { version = "0.13", features = ["blocking", "json"] }
 clap = "4.6.4"
 ctrlc = "3.5.2"
 crossterm = "0.29.0"
+age = "0.12.1"
