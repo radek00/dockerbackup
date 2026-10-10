@@ -23,7 +23,6 @@ pub struct SshDestination {
     pub path: String,
 }
 
-/// A running pipeline: child processes plus an optional in-process stream worker.
 #[derive(Debug)]
 pub struct SpawnedBackup {
     pub temp_container_name: String,
@@ -32,8 +31,6 @@ pub struct SpawnedBackup {
 }
 
 impl SpawnedBackup {
-    /// Returns `None` while running, `Some(result)` once every stage and the worker are done.
-    /// On failure all remaining stages are torn down.
     pub fn poll(&mut self) -> Option<Result<(), BackupError>> {
         if self.worker.as_ref().is_some_and(|w| w.is_finished()) {
             if let Err(err) = self.join_worker() {
@@ -63,7 +60,6 @@ impl SpawnedBackup {
         Some(Ok(()))
     }
 
-    /// Kills all stages, removes the temp container and waits for the worker to exit.
     pub fn abort(&mut self) {
         for (_, child) in &mut self.stages {
             let _ = child.kill();
@@ -193,7 +189,6 @@ impl BackupDestination for LocalDestination {
             });
         };
 
-        // Validate inputs and open the output before spawning anything that needs cleanup.
         let recipients = parse_age_recipients(&config.recipients)?;
         let output_file = File::create(backup_dir.join("backup.tar.age"))?;
         let (child, docker_stdout) = spawn_tar_stream(&temp_container_name, volumes)?;
@@ -255,7 +250,6 @@ impl BackupDestination for SshDestination {
     ) -> Result<SpawnedBackup, BackupError> {
         let temp_container_name = build_temp_container_name("ssh", new_dir);
 
-        // Validate before spawning anything that needs cleanup.
         let recipients = encryption
             .map(|config| parse_age_recipients(&config.recipients))
             .transpose()?;
@@ -281,7 +275,6 @@ impl BackupDestination for SshDestination {
 
         match recipients {
             None => {
-                // Hand docker's stdout directly to ssh; no in-process copying needed.
                 let ssh = spawn_ssh(&self.host, &remote_command, Stdio::from(docker_stdout))
                     .inspect_err(|_| backup.abort())?;
                 backup.stages.push(("ssh", ssh));
@@ -328,7 +321,6 @@ fn docker_run_command(temp_container_name: &str, volumes: &[String]) -> Command 
     docker
 }
 
-/// Spawns a container that writes a tar of all volumes to its stdout.
 fn spawn_tar_stream(
     temp_container_name: &str,
     volumes: &[String],
