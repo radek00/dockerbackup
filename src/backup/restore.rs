@@ -1,8 +1,8 @@
 use age::{DecryptError, Decryptor, Identity, IdentityFile};
 use crossterm::style::Color;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Write};
 use std::io::stdout;
+use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{exit, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,7 +91,11 @@ impl DockerRestore {
         Ok(())
     }
 
-    fn run_restore(&self, volumes: &[String], archive: &ArchivePath) -> Result<String, BackupError> {
+    fn run_restore(
+        &self,
+        volumes: &[String],
+        archive: &ArchivePath,
+    ) -> Result<String, BackupError> {
         self.logger.log("Restore started...", LogLevel::Info);
 
         let mut spawned = spawn_restore(archive, &self.identities, volumes)?;
@@ -254,9 +258,7 @@ fn load_identities(paths: &[String]) -> Result<Vec<Box<dyn Identity + Send + Syn
             .into_identities()
             .map_err(map_decrypt_error)?;
 
-        identities.extend(
-            file_identities
-        );
+        identities.extend(file_identities);
     }
 
     if identities.is_empty() {
@@ -275,7 +277,11 @@ fn decrypt_stream_to_writer<R: io::Read, W: io::Write>(
 ) -> Result<(), BackupError> {
     let decryptor = Decryptor::new(BufReader::new(input)).map_err(map_decrypt_error)?;
     let mut reader = decryptor
-        .decrypt(identities.iter().map(|identity| identity.as_ref() as &dyn Identity))
+        .decrypt(
+            identities
+                .iter()
+                .map(|identity| identity.as_ref() as &dyn Identity),
+        )
         .map_err(map_decrypt_error)?;
 
     let mut output = BufWriter::new(output);

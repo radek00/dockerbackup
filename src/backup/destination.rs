@@ -120,8 +120,7 @@ pub trait BackupDestination: std::fmt::Debug + Send + Sync {
         volumes: &[String],
         new_dir: &str,
         encryption: Option<&BackupEncryptionConfig>,
-    )
-        -> Result<SpawnedBackup, BackupError>;
+    ) -> Result<SpawnedBackup, BackupError>;
     fn get_display_name(&self) -> String;
 }
 
@@ -199,9 +198,8 @@ impl BackupDestination for LocalDestination {
         let output_file = File::create(backup_dir.join("backup.tar.age"))?;
         let (child, docker_stdout) = spawn_tar_stream(&temp_container_name, volumes)?;
 
-        let worker = thread::spawn(move || {
-            encrypt_stream_to_writer(docker_stdout, output_file, recipients)
-        });
+        let worker =
+            thread::spawn(move || encrypt_stream_to_writer(docker_stdout, output_file, recipients));
 
         Ok(SpawnedBackup {
             temp_container_name,
@@ -296,7 +294,9 @@ impl BackupDestination for SshDestination {
 
                 let Some(ssh_stdin) = ssh_stdin else {
                     backup.abort();
-                    return Err(BackupError::new("Failed to open ssh stdin for backup stream"));
+                    return Err(BackupError::new(
+                        "Failed to open ssh stdin for backup stream",
+                    ));
                 };
                 backup.worker = Some(thread::spawn(move || {
                     encrypt_stream_to_writer(docker_stdout, ssh_stdin, recipients)
@@ -353,7 +353,9 @@ fn spawn_tar_stream(
             let _ = Command::new("docker")
                 .args(["rm", "-f", temp_container_name])
                 .output();
-            Err(BackupError::new("Failed to capture backup stream from docker"))
+            Err(BackupError::new(
+                "Failed to capture backup stream from docker",
+            ))
         }
     }
 }
