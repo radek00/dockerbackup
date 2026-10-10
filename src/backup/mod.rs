@@ -293,7 +293,6 @@ impl DockerBackup {
                         break;
                     }
 
-                    // Separate statement so the lock is released before sleeping.
                     let outcome = handle.0.lock().unwrap().poll();
                     match outcome {
                         Some(Ok(())) => {
@@ -333,27 +332,10 @@ impl DockerBackup {
 
         loop {
             match self.receiver.as_ref().unwrap().try_recv() {
-                Ok(message) => match message {
-                    Ok(result) => {
-                        results.push(Ok(BackupSuccess::new(&result)));
-                        if results.len() == self.dest_paths.len() {
-                            self.logger
-                                .reset_cursor_after_timers(self.dest_paths.len() as u16);
-                            self.logger.log("All backups finished", LogLevel::Success);
-                            for join_handle in join_handles {
-                                if let Err(err) = join_handle.join() {
-                                    self.logger.log(
-                                        &format!("Error joining thread: {:?}", err),
-                                        LogLevel::Error,
-                                    );
-                                }
-                            }
-
-                            return results;
-                        }
-                    }
-                    Err(err) => {
-                        if err.message == BACKUP_INTERRUPTED {
+                Ok(message) => {
+                    match message {
+                        Ok(result) => results.push(Ok(BackupSuccess::new(&result))),
+                        Err(err) if err.message == BACKUP_INTERRUPTED => {
                             for (backup_handle, _) in &backup_handles {
                                 backup_handle.lock().unwrap().abort();
                             }
@@ -375,9 +357,25 @@ impl DockerBackup {
                             results.push(Err(BackupError::new(BACKUP_INTERRUPTED)));
                             return results;
                         }
-                        results.push(Err(err));
+                        Err(err) => results.push(Err(err)),
                     }
-                },
+
+                    if results.len() == self.dest_paths.len() {
+                        self.logger
+                            .reset_cursor_after_timers(self.dest_paths.len() as u16);
+                        self.logger.log("All backups finished", LogLevel::Success);
+                        for join_handle in join_handles {
+                            if let Err(err) = join_handle.join() {
+                                self.logger.log(
+                                    &format!("Error joining thread: {:?}", err),
+                                    LogLevel::Error,
+                                );
+                            }
+                        }
+
+                        return results;
+                    }
+                }
                 Err(_) => {
                     thread::sleep(std::time::Duration::from_millis(100));
                 }
