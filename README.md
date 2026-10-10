@@ -11,6 +11,7 @@ This is a CLI tool for backing up Docker volumes.
 - Cancel backups early with graceful shutdown
 - Exclude containers and volumes from backup
 - Restore volumes from a local backup
+- Age encryption for backups
 
 ## Building
 Binary can be obtained by running:
@@ -35,6 +36,8 @@ Options:
           Gotify server url for notifications
       --discord <discord_url>
           Discord webhook url for notifications
+      --recipient <recipients>...
+          Age recipient public key (age1...). Repeat to allow multiple decryptors.
   -h, --help
           Print help
   -V, --version
@@ -50,7 +53,9 @@ Usage: dockerbackup restore [OPTIONS] --source <source_path>
 
 Options:
   -s, --source <source_path>
-          Restore source path pointing at a dated backup directory containing backup.tar.
+          Restore source path pointing at a dated backup directory containing backup.tar.age or backup.tar.
+      --identity <identities>...
+          Path to an age identity file for decrypting backup.tar.age. Repeat for key rotation/fallback.
       --exclude-containers <excluded_containers>...
           Containers to exclude
       --exclude-volumes <excluded_volumes>...
@@ -59,7 +64,25 @@ Options:
           Print help
 ```
 
-Restore stops any running containers (except excluded ones), extracts `backup.tar` from the given source directory into the currently-existing Docker volumes with matching names, and restarts the containers afterwards.
+Restore stops any running containers (except excluded ones), then:
+- If `backup.tar.age` exists, it is streamed through age decryption into tar extraction (requires at least one `--identity`).
+- Otherwise, `backup.tar` is extracted directly.
+
+During encrypted backups, dockerbackup streams tar output directly into age encryption and writes `backup.tar.age` to each destination, so no temporary plaintext archive is created.
+
+Example encrypted backup:
+```bash
+dockerbackup \
+    -d /mnt/external/backups \
+    --recipient age1examplepublickey...
+```
+
+Example encrypted restore:
+```bash
+dockerbackup restore \
+    -s /mnt/external/backups/2026-9-30 \
+    --identity ~/.config/age/keys.txt
+```
 
 Notes:
 - Volumes referenced in the archive that don't currently exist on the host are not automatically created — only volumes matching an existing volume name are restored into.
@@ -99,3 +122,4 @@ Test scripts:
 - `test_multi_destination.sh` — multiple simultaneous destinations succeeding together, and a partial-failure scenario (one destination unreachable while others still succeed).
 - `test_interrupt.sh` — Ctrl+C mid-backup, verifying temp container cleanup, container restart, and the interrupted-backup message.
 - `test_restore.sh` — backup+restore round trip verifying restored file content, preserved file permissions/ownership, excluded volumes/containers left untouched, container restart, missing-archive error.
+- `test_encryption.sh` — encrypted backup writes `backup.tar.age` (no plaintext `backup.tar`), encrypted restore with identity succeeds, restore without identity fails, and restore prioritizes `backup.tar.age` when both archive names exist.

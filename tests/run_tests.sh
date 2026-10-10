@@ -27,4 +27,7 @@ echo -e "${GREEN}All interrupt tests passed!${NC}"
 docker compose exec test-runner bash ./tests/test_restore.sh
 echo -e "${GREEN}All restore tests passed!${NC}"
 
+docker compose exec test-runner bash ./tests/test_encryption.sh
+echo -e "${GREEN}All encryption tests passed!${NC}"
+
 echo -e "${GREEN}All tests passed!${NC}"
