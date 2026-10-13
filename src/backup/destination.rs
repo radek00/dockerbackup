@@ -9,7 +9,7 @@ use std::{
 use age::{EncryptError, Encryptor, Recipient};
 
 use crate::backup::{
-    backup_result::BackupError, utils::build_temp_container_name, BackupEncryptionConfig,
+    BackupEncryptionConfig, backup_result::BackupError, utils::build_temp_container_name,
 };
 
 #[derive(Debug, Clone)]

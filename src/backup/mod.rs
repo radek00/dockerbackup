@@ -1,7 +1,7 @@
 use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
-use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::ArgAction;
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use crossterm::style::Color;
 use destination::{BackupDestination, SpawnedBackup};
 use logger::{LogLevel, Logger};
@@ -9,8 +9,9 @@ use std::io::stdout;
 use std::process::exit;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc, Mutex,
+    mpsc,
 };
 use std::thread;
 use std::time::Instant;

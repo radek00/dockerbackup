@@ -5,7 +5,7 @@ use std::{
 
 use crate::backup::{
     logger::LogLevel,
-    notification::{send_notification, Discord, Gotify},
+    notification::{Discord, Gotify, send_notification},
 };
 
 use super::DockerBackup;
