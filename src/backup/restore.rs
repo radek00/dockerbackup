@@ -4,9 +4,9 @@ use std::fs::File;
 use std::io::stdout;
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::process::{exit, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Command, Stdio, exit};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::backup::backup_result::BackupError;

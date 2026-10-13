@@ -9,7 +9,7 @@ use std::{
 use age::{EncryptError, Encryptor, Recipient};
 
 use crate::backup::{
-    backup_result::BackupError, utils::build_temp_container_name, BackupEncryptionConfig,
+    BackupEncryptionConfig, backup_result::BackupError, utils::build_temp_container_name,
 };
 
 #[derive(Debug, Clone)]
@@ -32,11 +32,11 @@ pub struct SpawnedBackup {
 
 impl SpawnedBackup {
     pub fn poll(&mut self) -> Option<Result<(), BackupError>> {
-        if self.worker.as_ref().is_some_and(|w| w.is_finished()) {
-            if let Err(err) = self.join_worker() {
-                self.abort();
-                return Some(Err(err));
-            }
+        if self.worker.as_ref().is_some_and(|w| w.is_finished())
+            && let Err(err) = self.join_worker()
+        {
+            self.abort();
+            return Some(Err(err));
         }
 
         let mut running = false;

@@ -1,4 +1,4 @@
-FROM rust:1.97.1
+FROM rust:1.99
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \

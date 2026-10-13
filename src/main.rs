@@ -1,4 +1,4 @@
-use backup::{build_command, DockerBackup, DockerRestore};
+use backup::{DockerBackup, DockerRestore, build_command};
 
 mod backup;
 fn main() {

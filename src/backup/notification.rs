@@ -47,10 +47,10 @@ impl<'a> Notification for Gotify<'a> {
                 .header("Content-Type", "application/json")
                 .json(&map)
                 .send();
-            if let Ok(response) = _req {
-                if response.status().is_success() {
-                    return Ok(());
-                }
+            if let Ok(response) = _req
+                && response.status().is_success()
+            {
+                return Ok(());
             }
             thread::sleep(time::Duration::from_secs(10));
         }
