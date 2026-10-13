@@ -10,6 +10,7 @@ homepage = "https://github.com/radek00/dockerbackup"
 repository = "https://github.com/radek00/dockerbackup"
 keywords = ["cli", "backup", "docker"]
 categories = ["command-line-utilities"]
+rust-version = "1.99.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
