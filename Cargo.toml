@@ -1,7 +1,7 @@
 [package]
 name = "dockerbackup"
 version = "3.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Radek"]
 license = "MIT OR Apache-2.0"
 description = "A simple Docker backup and restore tool"
