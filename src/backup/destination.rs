@@ -309,6 +309,8 @@ fn docker_run_command(temp_container_name: &str, volumes: &[String]) -> Command 
     let mut docker = Command::new("docker");
     docker
         .arg("run")
+        .arg("--log-driver")
+        .arg("none")
         .arg("--rm")
         .arg("--name")
         .arg(temp_container_name);
