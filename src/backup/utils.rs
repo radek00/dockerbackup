@@ -1,6 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, path::Path, process::Command, sync::Arc};
 
+use age::secrecy::SecretString;
+
 use crate::backup::destination::{BackupDestination, LocalDestination, SshDestination};
 use crate::backup::logger::{LogLevel, Logger};
 
@@ -207,6 +209,12 @@ pub fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("dockerbackup-{}-{}-{}", prefix, new_dir, timestamp)
+}
+
+pub fn read_passphrase(path: &str) -> Result<SecretString, BackupError> {
+    let passphrase = std::fs::read_to_string(path)
+        .map_err(|e| BackupError::new(&format!("Failed to read passphrase file: {}", e)))?;
+    Ok(SecretString::from(passphrase.trim()))
 }
 
 #[cfg(test)]

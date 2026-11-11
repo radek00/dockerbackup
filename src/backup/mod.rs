@@ -1,3 +1,4 @@
+use age::secrecy::SecretString;
 use backup_result::{BackupError, BackupSuccess};
 use chrono::{self, Datelike};
 use clap::ArgAction;
@@ -29,6 +30,8 @@ mod utils;
 
 pub use restore::DockerRestore;
 
+use crate::backup::utils::read_passphrase;
+
 const BACKUP_INTERRUPTED: &str = "Backup interrupted";
 
 type BackupChannel = (
@@ -36,9 +39,10 @@ type BackupChannel = (
     mpsc::Receiver<Result<String, BackupError>>,
 );
 
-#[derive(Debug, Clone)]
-pub struct BackupEncryptionConfig {
-    pub recipients: Vec<String>,
+#[derive(Debug)]
+pub enum BackupEncryptionConfig {
+    Recipients(Vec<String>),
+    Passphrase(SecretString),
 }
 
 pub struct DockerBackup {
@@ -85,6 +89,7 @@ pub fn build_command() -> clap::Command {
             .required(false)
             .long("discord"))
         .arg(recipients_arg())
+        .arg(passphrase_file_arg("recipients"))
         .subcommand(
             clap::Command::new("restore")
                 .about("Restore docker volumes from a local backup")
@@ -98,6 +103,7 @@ pub fn build_command() -> clap::Command {
                 .arg(identities_arg())
                 .arg(excluded_containers_arg())
                 .arg(excluded_volumes_arg())
+                .arg(passphrase_file_arg("identities"))
         )
 }
 
@@ -135,6 +141,15 @@ fn excluded_volumes_arg() -> clap::Arg {
         .num_args(1..)
 }
 
+fn passphrase_file_arg(conflicts_with: &'static str) -> clap::Arg {
+    clap::Arg::new("passphrase_file")
+        .help("Path to a file containing the passphrase for encrypting/decrypting backups")
+        .required(false)
+        .long("passphrase-file")
+        .num_args(1)
+        .conflicts_with(conflicts_with)
+}
+
 impl DockerBackup {
     pub fn build(mut matches: clap::ArgMatches) -> DockerBackup {
         check_docker().expect("Can't continue without Docker installed");
@@ -146,15 +161,18 @@ impl DockerBackup {
             .unwrap()
             .collect();
 
-        let recipients: Vec<String> = matches
+        let recipients = matches
             .remove_many::<String>("recipients")
-            .map(|items| items.collect())
-            .unwrap_or_default();
+            .map(|items| items.collect::<Vec<_>>());
+        let passphrase_path = matches.remove_one::<String>("passphrase_file");
 
-        let encryption = if recipients.is_empty() {
-            None
-        } else {
-            Some(BackupEncryptionConfig { recipients })
+        let encryption = match (recipients, passphrase_path) {
+            (Some(recipients), None) => Some(BackupEncryptionConfig::Recipients(recipients)),
+            (None, Some(path)) => Some(BackupEncryptionConfig::Passphrase(
+                read_passphrase(&path).expect("Failed to read passphrase file"),
+            )),
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!("clap rejects --recipient with --passphrase-file"),
         };
 
         let (excluded_containers, excluded_volumes) = extract_excluded_lists(&mut matches);
