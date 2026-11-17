@@ -189,12 +189,12 @@ impl BackupDestination for LocalDestination {
             });
         };
 
-        let recipients = parse_age_recipients(&config.recipients)?;
         let output_file = File::create(backup_dir.join("backup.tar.age"))?;
         let (child, docker_stdout) = spawn_tar_stream(&temp_container_name, volumes)?;
 
+        let encryptor = build_encryptor(&config)?;
         let worker =
-            thread::spawn(move || encrypt_stream_to_writer(docker_stdout, output_file, recipients));
+            thread::spawn(move || encrypt_stream_to_writer(docker_stdout, output_file, encryptor));
 
         Ok(SpawnedBackup {
             temp_container_name,
@@ -250,9 +250,9 @@ impl BackupDestination for SshDestination {
     ) -> Result<SpawnedBackup, BackupError> {
         let temp_container_name = build_temp_container_name("ssh", new_dir);
 
-        let recipients = encryption
-            .map(|config| parse_age_recipients(&config.recipients))
-            .transpose()?;
+        // let recipients = encryption
+        //     .map(|config| parse_age_recipients(&config.recipients))
+        //     .transpose()?;
 
         let dest_path = format!("{}/{}", self.path, new_dir);
         let escaped_dest_path = escape_for_single_quotes(&dest_path);
@@ -273,13 +273,13 @@ impl BackupDestination for SshDestination {
             worker: None,
         };
 
-        match recipients {
+        match encryption {
             None => {
                 let ssh = spawn_ssh(&self.host, &remote_command, Stdio::from(docker_stdout))
                     .inspect_err(|_| backup.abort())?;
                 backup.stages.push(("ssh", ssh));
             }
-            Some(recipients) => {
+            Some(encryption) => {
                 let mut ssh = spawn_ssh(&self.host, &remote_command, Stdio::piped())
                     .inspect_err(|_| backup.abort())?;
                 let ssh_stdin = ssh.stdin.take();
@@ -291,8 +291,9 @@ impl BackupDestination for SshDestination {
                         "Failed to open ssh stdin for backup stream",
                     ));
                 };
+                let encryptor = build_encryptor(&encryption)?;
                 backup.worker = Some(thread::spawn(move || {
-                    encrypt_stream_to_writer(docker_stdout, ssh_stdin, recipients)
+                    encrypt_stream_to_writer(docker_stdout, ssh_stdin, encryptor)
                 }));
             }
         }
@@ -368,6 +369,19 @@ fn escape_for_single_quotes(value: &str) -> String {
     value.replace('\'', "'\\''")
 }
 
+fn build_encryptor(config: &BackupEncryptionConfig) -> Result<Encryptor, BackupError> {
+    let encryptor = match config {
+        BackupEncryptionConfig::Passphrase(passphrase) => {
+            Encryptor::with_user_passphrase(passphrase.clone())
+        }
+        BackupEncryptionConfig::Recipients(recipients) => {
+            let parsed_recipients = parse_age_recipients(recipients)?;
+            Encryptor::with_recipients(parsed_recipients.iter().map(|r| r as &dyn Recipient))
+                .map_err(map_encrypt_error)?
+        }
+    };
+    Ok(encryptor)
+}
 fn parse_age_recipients(recipients: &[String]) -> Result<Vec<age::x25519::Recipient>, BackupError> {
     recipients
         .iter()
@@ -385,10 +399,8 @@ fn parse_age_recipients(recipients: &[String]) -> Result<Vec<age::x25519::Recipi
 fn encrypt_stream_to_writer<R: io::Read, W: io::Write>(
     mut input: R,
     output: W,
-    recipients: Vec<age::x25519::Recipient>,
+    encryptor: Encryptor,
 ) -> Result<(), BackupError> {
-    let encryptor = Encryptor::with_recipients(recipients.iter().map(|r| r as &dyn Recipient))
-        .map_err(map_encrypt_error)?;
     let mut writer = encryptor
         .wrap_output(io::BufWriter::new(output))
         .map_err(|e| BackupError::new(&format!("Failed to initialize age writer: {}", e)))?;
