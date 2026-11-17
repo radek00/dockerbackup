@@ -1,4 +1,5 @@
-use age::{DecryptError, Decryptor, Identity, IdentityFile};
+use age::secrecy::SecretString;
+use age::{DecryptError, Decryptor, Identity, IdentityFile, scrypt};
 use crossterm::style::Color;
 use std::fs::File;
 use std::io::stdout;
@@ -14,14 +15,14 @@ use crate::backup::destination::SpawnedBackup;
 use crate::backup::logger::{LogLevel, Logger};
 use crate::backup::utils::{
     build_temp_container_name, check_docker, extract_excluded_lists, get_elapsed_time,
-    list_backup_volumes, with_containers_paused,
+    list_backup_volumes, read_passphrase, with_containers_paused,
 };
 
 const RESTORE_INTERRUPTED: &str = "Restore interrupted";
 
 pub struct DockerRestore {
     source_path: String,
-    identities: Vec<String>,
+    decryption: Option<DecryptionConfig>,
     excluded_containers: Vec<String>,
     excluded_volumes: Vec<String>,
     logger: Arc<Logger>,
@@ -33,18 +34,33 @@ struct ArchivePath {
     encrypted: bool,
 }
 
+enum DecryptionConfig {
+    Identities(Vec<String>),
+    Passphrase(SecretString),
+}
+
 impl DockerRestore {
     pub fn build(matches: &clap::ArgMatches) -> DockerRestore {
         check_docker().expect("Can't continue without Docker installed");
         let mut matches = matches.clone();
         let (excluded_containers, excluded_volumes) = extract_excluded_lists(&mut matches);
 
+        let identities = matches
+            .remove_many::<String>("identities")
+            .map(|items| items.collect::<Vec<_>>());
+        let passphrase_path = matches.remove_one::<String>("passphrase_file");
+
+        let decryption = match (identities, passphrase_path) {
+            (Some(paths), None) => Some(DecryptionConfig::Identities(paths)),
+            (None, Some(path)) => Some(DecryptionConfig::Passphrase(
+                read_passphrase(&path).expect("Failed to read passphrase file"),
+            )),
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!("clap rejects --identity with --passphrase-file"),
+        };
         DockerRestore {
             source_path: matches.remove_one::<String>("source_path").unwrap(),
-            identities: matches
-                .remove_many::<String>("identities")
-                .map(|items| items.collect())
-                .unwrap_or_default(),
+            decryption,
             excluded_containers,
             excluded_volumes,
             logger: Arc::new(Logger::new(stdout())),
@@ -70,9 +86,9 @@ impl DockerRestore {
         .expect("Error setting Ctrl-C handler");
 
         let archive = resolve_archive_path(&self.source_path)?;
-        let result = if archive.encrypted && self.identities.is_empty() {
+        let result = if archive.encrypted && self.decryption.is_none() {
             Err(BackupError::new(
-                "Encrypted backup detected. Provide at least one --identity path for restore",
+                "Encrypted backup detected. Provide --identity or --passphrase-file for restore",
             ))
         } else {
             list_backup_volumes(&self.excluded_volumes)
@@ -98,7 +114,7 @@ impl DockerRestore {
     ) -> Result<String, BackupError> {
         self.logger.log("Restore started...", LogLevel::Info);
 
-        let mut spawned = spawn_restore(archive, &self.identities, volumes)?;
+        let mut spawned = spawn_restore(archive, self.decryption.as_ref(), volumes)?;
         let timer = Instant::now();
 
         loop {
@@ -172,7 +188,7 @@ fn resolve_archive_path(source_path: &str) -> Result<ArchivePath, BackupError> {
 
 fn spawn_restore(
     archive: &ArchivePath,
-    identity_paths: &[String],
+    decryption: Option<&DecryptionConfig>,
     volumes: &[String],
 ) -> Result<SpawnedBackup, BackupError> {
     let temp_container_name = build_temp_container_name("restore", "local");
@@ -189,6 +205,11 @@ fn spawn_restore(
     }
 
     if archive.encrypted {
+        let config = decryption.ok_or_else(|| {
+            BackupError::new("Encrypted backup requires --identity or --passphrase-file")
+        })?;
+        let identities = build_identities(config)?;
+
         let mut child = docker
             .arg("-i")
             .arg("alpine")
@@ -206,11 +227,9 @@ fn spawn_restore(
             .stdin
             .take()
             .ok_or_else(|| BackupError::new("Failed to open docker stdin for restore"))?;
-        let identity_paths = identity_paths.to_vec();
         let archive_path = archive.path.clone();
 
         let worker = std::thread::spawn(move || {
-            let identities = load_identities(&identity_paths)?;
             let archive_file = File::open(&archive_path)?;
             decrypt_stream_to_writer(archive_file, docker_stdin, identities)
         });
@@ -245,6 +264,17 @@ fn spawn_restore(
         stages: vec![("docker", child)],
         worker: None,
     })
+}
+
+fn build_identities(
+    config: &DecryptionConfig,
+) -> Result<Vec<Box<dyn Identity + Send + Sync>>, BackupError> {
+    match config {
+        DecryptionConfig::Identities(paths) => load_identities(paths),
+        DecryptionConfig::Passphrase(passphrase) => {
+            Ok(vec![Box::new(scrypt::Identity::new(passphrase.clone()))])
+        }
+    }
 }
 
 fn load_identities(paths: &[String]) -> Result<Vec<Box<dyn Identity + Send + Sync>>, BackupError> {
