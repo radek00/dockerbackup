@@ -341,3 +341,140 @@ fn decrypt_stream_to_writer<R: io::Read, W: io::Write>(
 fn map_decrypt_error(err: DecryptError) -> BackupError {
     BackupError::new(&format!("Failed to decrypt age archive: {}", err))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backup::utils::write_temp_file;
+
+    const TEST_IDENTITY: &str =
+        "AGE-SECRET-KEY-1GQ9778VQXMMJVE8SK7J6VT8UJ4HDQAJUVSFCWCM02D8GEWQ72PVQ2Y5J33";
+
+    fn passphrase_config(passphrase: &str) -> DecryptionConfig {
+        DecryptionConfig::Passphrase(SecretString::from(passphrase))
+    }
+
+    fn encrypt_with(encryptor: age::Encryptor, plaintext: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut writer = encryptor.wrap_output(&mut out).unwrap();
+        writer.write_all(plaintext).unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
+    fn encrypt_with_passphrase(passphrase: &str, plaintext: &[u8]) -> Vec<u8> {
+        encrypt_with(
+            age::Encryptor::with_user_passphrase(SecretString::from(passphrase)),
+            plaintext,
+        )
+    }
+
+    fn encrypt_to_test_recipient(plaintext: &[u8]) -> Vec<u8> {
+        let recipient = TEST_IDENTITY
+            .parse::<age::x25519::Identity>()
+            .unwrap()
+            .to_public();
+        let encryptor =
+            age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+                .unwrap();
+        encrypt_with(encryptor, plaintext)
+    }
+
+    fn decrypt(ciphertext: &[u8], config: &DecryptionConfig) -> Result<Vec<u8>, BackupError> {
+        let identities = build_identities(config)?;
+        let mut out = Vec::new();
+        decrypt_stream_to_writer(ciphertext, &mut out, identities)?;
+        Ok(out)
+    }
+
+    fn check_header(ciphertext: &[u8], config: &DecryptionConfig) -> Result<(), BackupError> {
+        let path = write_temp_file(ciphertext);
+        let archive = ArchivePath {
+            path: path.clone(),
+            encrypted: true,
+        };
+        let result = check_decryption_header(&archive, config);
+        std::fs::remove_file(path).unwrap();
+        result
+    }
+
+    #[test]
+    fn decrypts_passphrase_archive() {
+        let plaintext: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let ciphertext = encrypt_with_passphrase("correct horse", &plaintext);
+
+        let decrypted = decrypt(&ciphertext, &passphrase_config("correct horse")).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn rejects_wrong_passphrase() {
+        let ciphertext = encrypt_with_passphrase("correct horse", b"data");
+
+        let err = decrypt(&ciphertext, &passphrase_config("wrong horse")).unwrap_err();
+
+        assert!(err.message.contains("Failed to decrypt age archive"));
+    }
+
+    #[test]
+    fn decrypts_recipient_archive_with_identity_file() {
+        let identity_path = write_temp_file(TEST_IDENTITY.as_bytes());
+        let config =
+            DecryptionConfig::Identities(vec![identity_path.to_str().unwrap().to_string()]);
+        let ciphertext = encrypt_to_test_recipient(b"data");
+
+        let decrypted = decrypt(&ciphertext, &config);
+        std::fs::remove_file(identity_path).unwrap();
+
+        assert_eq!(decrypted.unwrap(), b"data");
+    }
+
+    #[test]
+    fn rejects_passphrase_archive_with_identity_file() {
+        let identity_path = write_temp_file(TEST_IDENTITY.as_bytes());
+        let config =
+            DecryptionConfig::Identities(vec![identity_path.to_str().unwrap().to_string()]);
+        let ciphertext = encrypt_with_passphrase("correct horse", b"data");
+
+        let result = decrypt(&ciphertext, &config);
+        std::fs::remove_file(identity_path).unwrap();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_recipient_archive_with_passphrase() {
+        let ciphertext = encrypt_to_test_recipient(b"data");
+
+        assert!(decrypt(&ciphertext, &passphrase_config("correct horse")).is_err());
+    }
+
+    #[test]
+    fn build_identities_rejects_missing_identity_file() {
+        let config = DecryptionConfig::Identities(vec!["/path/that/does/not/exist".to_string()]);
+
+        let err = build_identities(&config).err().unwrap();
+
+        assert!(err.message.contains("Failed to read identity file"));
+    }
+
+    #[test]
+    fn header_check_accepts_correct_passphrase() {
+        let ciphertext = encrypt_with_passphrase("correct horse", b"data");
+
+        assert!(check_header(&ciphertext, &passphrase_config("correct horse")).is_ok());
+    }
+
+    #[test]
+    fn header_check_rejects_wrong_passphrase() {
+        let ciphertext = encrypt_with_passphrase("correct horse", b"data");
+
+        assert!(check_header(&ciphertext, &passphrase_config("wrong horse")).is_err());
+    }
+
+    #[test]
+    fn header_check_rejects_non_age_file() {
+        assert!(check_header(b"this-is-not-an-age-file", &passphrase_config("x")).is_err());
+    }
+}

@@ -222,8 +222,23 @@ pub fn read_passphrase(path: &str) -> Result<SecretString, BackupError> {
 }
 
 #[cfg(test)]
+pub(crate) fn write_temp_file(contents: &[u8]) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    let path = std::env::temp_dir().join(format!(
+        "dockerbackup-test-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, contents).unwrap();
+    path
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use age::secrecy::ExposeSecret;
 
     #[test]
     fn parses_valid_ssh_destination() {
@@ -266,5 +281,45 @@ mod tests {
     fn rejects_nonexistent_local_source() {
         let err = parse_source_path("/path/that/does/not/exist/hopefully").unwrap_err();
         assert_eq!(err, "Local path does not exist");
+    }
+
+    fn read_passphrase_from(contents: &str) -> Result<SecretString, BackupError> {
+        let path = write_temp_file(contents.as_bytes());
+        let result = read_passphrase(path.to_str().unwrap());
+        std::fs::remove_file(path).unwrap();
+        result
+    }
+
+    #[test]
+    fn read_passphrase_strips_trailing_newline() {
+        let passphrase = read_passphrase_from("secret\n").unwrap();
+        assert_eq!(passphrase.expose_secret(), "secret");
+    }
+
+    #[test]
+    fn read_passphrase_accepts_missing_trailing_newline() {
+        let passphrase = read_passphrase_from("secret").unwrap();
+        assert_eq!(passphrase.expose_secret(), "secret");
+    }
+
+    #[test]
+    fn read_passphrase_keeps_internal_spaces() {
+        let passphrase = read_passphrase_from("correct horse battery\n").unwrap();
+        assert_eq!(passphrase.expose_secret(), "correct horse battery");
+    }
+
+    #[test]
+    fn read_passphrase_rejects_empty_file() {
+        assert!(read_passphrase_from("").is_err());
+    }
+
+    #[test]
+    fn read_passphrase_rejects_whitespace_only_file() {
+        assert!(read_passphrase_from(" \n\t\n").is_err());
+    }
+
+    #[test]
+    fn read_passphrase_rejects_missing_file() {
+        assert!(read_passphrase("/path/that/does/not/exist/hopefully").is_err());
     }
 }

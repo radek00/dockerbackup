@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, extract_excluded_lists, get_elapsed_time, get_volumes_size, list_backup_volumes,
-    parse_destination_path, parse_source_path, with_containers_paused, read_passphrase
+    parse_destination_path, parse_source_path, read_passphrase, with_containers_paused,
 };
 
 mod backup_result;
@@ -398,5 +398,62 @@ impl DockerBackup {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    fn parse(args: &[&str]) -> Result<clap::ArgMatches, clap::Error> {
+        build_command()
+            .try_get_matches_from(std::iter::once("dockerbackup").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn command_definition_is_valid() {
+        build_command().debug_assert();
+    }
+
+    #[test]
+    fn backup_accepts_recipient_or_passphrase_file() {
+        assert!(parse(&["-d", ".", "--recipient", "age1abc"]).is_ok());
+        assert!(parse(&["-d", ".", "--passphrase-file", "pass.txt"]).is_ok());
+    }
+
+    #[test]
+    fn backup_rejects_recipient_with_passphrase_file() {
+        let err = parse(&[
+            "-d",
+            ".",
+            "--recipient",
+            "age1abc",
+            "--passphrase-file",
+            "pass.txt",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn restore_accepts_identity_or_passphrase_file() {
+        assert!(parse(&["restore", "-s", ".", "--identity", "key.txt"]).is_ok());
+        assert!(parse(&["restore", "-s", ".", "--passphrase-file", "pass.txt"]).is_ok());
+    }
+
+    #[test]
+    fn restore_rejects_identity_with_passphrase_file() {
+        let err = parse(&[
+            "restore",
+            "-s",
+            ".",
+            "--identity",
+            "key.txt",
+            "--passphrase-file",
+            "pass.txt",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 }

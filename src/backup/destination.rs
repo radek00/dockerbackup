@@ -418,6 +418,7 @@ fn map_encrypt_error(err: EncryptError) -> BackupError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use age::secrecy::SecretString;
 
     #[test]
     fn escapes_single_quotes_for_shell() {
@@ -432,5 +433,79 @@ mod tests {
 
         assert!(first.starts_with("dockerbackup-local-2026-1-1-"));
         assert_ne!(first, second);
+    }
+
+    const TEST_IDENTITY: &str =
+        "AGE-SECRET-KEY-1GQ9778VQXMMJVE8SK7J6VT8UJ4HDQAJUVSFCWCM02D8GEWQ72PVQ2Y5J33";
+
+    fn passphrase_config(passphrase: &str) -> BackupEncryptionConfig {
+        BackupEncryptionConfig::Passphrase(SecretString::from(passphrase))
+    }
+
+    fn encrypt(config: &BackupEncryptionConfig, plaintext: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        encrypt_stream_to_writer(plaintext, &mut out, build_encryptor(config).unwrap()).unwrap();
+        out
+    }
+
+    fn decrypt(
+        ciphertext: &[u8],
+        identity: &dyn age::Identity,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let mut reader = age::Decryptor::new(ciphertext)?.decrypt(std::iter::once(identity))?;
+        let mut out = Vec::new();
+        reader.read_to_end(&mut out)?;
+        Ok(out)
+    }
+
+    // Larger than one 64 KiB age chunk.
+    fn sample_plaintext() -> Vec<u8> {
+        (0..200_000u32).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn passphrase_encryption_round_trips() {
+        let plaintext = sample_plaintext();
+        let ciphertext = encrypt(&passphrase_config("correct horse"), &plaintext);
+        let identity = age::scrypt::Identity::new(SecretString::from("correct horse"));
+
+        assert_ne!(ciphertext, plaintext);
+        assert_eq!(decrypt(&ciphertext, &identity).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn passphrase_encryption_rejects_wrong_passphrase() {
+        let ciphertext = encrypt(&passphrase_config("correct horse"), b"data");
+        let identity = age::scrypt::Identity::new(SecretString::from("wrong horse"));
+
+        assert!(decrypt(&ciphertext, &identity).is_err());
+    }
+
+    #[test]
+    fn recipient_encryption_round_trips() {
+        let identity = TEST_IDENTITY.parse::<age::x25519::Identity>().unwrap();
+        let config = BackupEncryptionConfig::Recipients(vec![identity.to_public().to_string()]);
+        let plaintext = sample_plaintext();
+
+        let ciphertext = encrypt(&config, &plaintext);
+
+        assert_eq!(decrypt(&ciphertext, &identity).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn passphrase_archive_rejects_x25519_identity() {
+        let identity = TEST_IDENTITY.parse::<age::x25519::Identity>().unwrap();
+        let ciphertext = encrypt(&passphrase_config("correct horse"), b"data");
+
+        assert!(decrypt(&ciphertext, &identity).is_err());
+    }
+
+    #[test]
+    fn build_encryptor_rejects_invalid_recipient() {
+        let config = BackupEncryptionConfig::Recipients(vec!["not-a-key".to_string()]);
+
+        let err = build_encryptor(&config).err().unwrap();
+
+        assert!(err.message.contains("Invalid age recipient"));
     }
 }
