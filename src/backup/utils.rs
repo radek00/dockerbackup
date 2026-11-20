@@ -214,6 +214,10 @@ pub fn build_temp_container_name(prefix: &str, new_dir: &str) -> String {
 pub fn read_passphrase(path: &str) -> Result<SecretString, BackupError> {
     let passphrase = std::fs::read_to_string(path)
         .map_err(|e| BackupError::new(&format!("Failed to read passphrase file: {}", e)))?;
+
+    if passphrase.trim().is_empty() {
+        return Err(BackupError::new("Passphrase is empty"));
+    }
     Ok(SecretString::from(passphrase.trim()))
 }
 
