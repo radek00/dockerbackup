@@ -192,7 +192,7 @@ impl BackupDestination for LocalDestination {
         let output_file = File::create(backup_dir.join("backup.tar.age"))?;
         let (child, docker_stdout) = spawn_tar_stream(&temp_container_name, volumes)?;
 
-        let encryptor = build_encryptor(&config)?;
+        let encryptor = build_encryptor(config)?;
         let worker =
             thread::spawn(move || encrypt_stream_to_writer(docker_stdout, output_file, encryptor));
 
@@ -291,7 +291,7 @@ impl BackupDestination for SshDestination {
                         "Failed to open ssh stdin for backup stream",
                     ));
                 };
-                let encryptor = build_encryptor(&encryption)?;
+                let encryptor = build_encryptor(encryption)?;
                 backup.worker = Some(thread::spawn(move || {
                     encrypt_stream_to_writer(docker_stdout, ssh_stdin, encryptor)
                 }));
