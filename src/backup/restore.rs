@@ -86,12 +86,13 @@ impl DockerRestore {
         .expect("Error setting Ctrl-C handler");
 
         let archive = resolve_archive_path(&self.source_path)?;
-        let result = if archive.encrypted && self.decryption.is_none() {
-            Err(BackupError::new(
+        let result = match (archive.encrypted, self.decryption.as_ref()) {
+            (true, None) => Err(BackupError::new(
                 "Encrypted backup detected. Provide --identity or --passphrase-file for restore",
-            ))
-        } else {
-            list_backup_volumes(&self.excluded_volumes)
+            )),
+            (true, Some(config)) => check_decryption_header(&archive, config)
+                .and_then(|_| list_backup_volumes(&self.excluded_volumes)),
+            (false, _) => list_backup_volumes(&self.excluded_volumes),
         };
 
         let result = match result {
@@ -264,6 +265,23 @@ fn spawn_restore(
         stages: vec![("docker", child)],
         worker: None,
     })
+}
+
+fn check_decryption_header(
+    archive: &ArchivePath,
+    config: &DecryptionConfig,
+) -> Result<(), BackupError> {
+    let identities = build_identities(config)?;
+    let file = File::open(&archive.path)?;
+    Decryptor::new(BufReader::new(file))
+        .map_err(map_decrypt_error)?
+        .decrypt(
+            identities
+                .iter()
+                .map(|identity| identity.as_ref() as &dyn Identity),
+        )
+        .map_err(map_decrypt_error)?;
+    Ok(())
 }
 
 fn build_identities(
