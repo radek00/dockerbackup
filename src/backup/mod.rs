@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Instant;
 use utils::{
     check_docker, extract_excluded_lists, get_elapsed_time, get_volumes_size, list_backup_volumes,
-    parse_destination_path, parse_source_path, with_containers_paused,
+    parse_destination_path, parse_source_path, with_containers_paused, read_passphrase
 };
 
 mod backup_result;
@@ -29,8 +29,6 @@ mod restore;
 mod utils;
 
 pub use restore::DockerRestore;
-
-use crate::backup::utils::read_passphrase;
 
 const BACKUP_INTERRUPTED: &str = "Backup interrupted";
 

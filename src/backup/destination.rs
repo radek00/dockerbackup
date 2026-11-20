@@ -188,7 +188,7 @@ impl BackupDestination for LocalDestination {
                 worker: None,
             });
         };
-        
+
         let encryptor = build_encryptor(config)?;
 
         let output_file = File::create(backup_dir.join("backup.tar.age"))?;
@@ -251,13 +251,11 @@ impl BackupDestination for SshDestination {
     ) -> Result<SpawnedBackup, BackupError> {
         let temp_container_name = build_temp_container_name("ssh", new_dir);
 
-        // let recipients = encryption
-        //     .map(|config| parse_age_recipients(&config.recipients))
-        //     .transpose()?;
+        let encryptor = encryption.map(build_encryptor).transpose()?;
 
         let dest_path = format!("{}/{}", self.path, new_dir);
         let escaped_dest_path = escape_for_single_quotes(&dest_path);
-        let remote_file_name = if encryption.is_some() {
+        let remote_file_name = if encryptor.is_some() {
             "backup.tar.age"
         } else {
             "backup.tar"
@@ -274,14 +272,13 @@ impl BackupDestination for SshDestination {
             worker: None,
         };
 
-        match encryption {
+        match encryptor {
             None => {
                 let ssh = spawn_ssh(&self.host, &remote_command, Stdio::from(docker_stdout))
                     .inspect_err(|_| backup.abort())?;
                 backup.stages.push(("ssh", ssh));
             }
-            Some(encryption) => {
-                let encryptor = build_encryptor(encryption)?;
+            Some(encryptor) => {
                 let mut ssh = spawn_ssh(&self.host, &remote_command, Stdio::piped())
                     .inspect_err(|_| backup.abort())?;
                 let ssh_stdin = ssh.stdin.take();
